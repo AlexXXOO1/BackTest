@@ -8,15 +8,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from data_store import MarketDataStore
-from indicator_store import IndicatorStore
+from config import BacktestConfig
+from core.data_store import MarketDataStore
+from core.indicator_store import IndicatorStore
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Build reusable daily indicator cache.")
-    parser.add_argument("--txt-dir", type=Path, default=Path("data"))
-    parser.add_argument("--market-cache-dir", type=Path, default=Path("data/market_cache/daily_bars_by_symbol"))
-    parser.add_argument("--indicator-cache-path", type=Path, default=Path("data/indicator_cache/daily_indicators.parquet"))
+    parser.add_argument("--txt-dir", type=Path, default=default.txt_dir)
+    parser.add_argument("--market-cache-dir", type=Path, default=default.market_cache_dir)
+    parser.add_argument("--indicator-cache-path", type=Path, default=default.indicator_cache_path)
     parser.add_argument("--start-date", type=str, default=None)
     parser.add_argument("--end-date", type=str, default=None)
     parser.add_argument("--n1", type=int, default=4)

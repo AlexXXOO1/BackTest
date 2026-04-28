@@ -10,7 +10,7 @@ import pandas as pd
 # 你每次只需要改这里
 # ============================================================
 
-DATA_DIR = r"C:\Users\zyf37\Desktop\Trade Backtest v1.0.0\data"
+DATA_DIR = r"C:\Users\zyf37\Desktop\BackTest Data\data"
 
 # 支持输入多个股票代码
 CODES = [
@@ -36,7 +36,7 @@ CODES = [
 T0_DATE = "2026-04-24"
 
 # 输出文件路径
-OUTPUT_CSV = r"C:\Users\zyf37\Desktop\tplus_prices.csv"
+OUTPUT_CSV = r"C:\Users\zyf37\Desktop\BackTest Data\output\tplus_prices.csv"
 
 
 # ============================================================

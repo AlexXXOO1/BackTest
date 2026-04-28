@@ -39,15 +39,16 @@ try:
 except ImportError:  # pragma: no cover
     tqdm = None
 
-from data_store import MarketDataStore
-from pool_store import PoolStore
+from config import BacktestConfig
+from core.data_store import MarketDataStore
+from core.pool_store import PoolStore
 from selection_strategies.renko_chart_select_strategy_v1 import DEFAULT_RENKO_CHART_SELECT_WEIGHTS
 
 
 DEFAULT_START_DATE = "2024-01-01"
 DEFAULT_END_DATE = "2025-12-31"
 DEFAULT_STRATEGY = "renko_chart_select_strategy_v1"
-DEFAULT_OUTPUT = "output/v1_indicator_attribution_20240101_20251231.csv"
+DEFAULT_OUTPUT_NAME = "v1_indicator_attribution_20240101_20251231.csv"
 
 # These are the v1 factors that have explicit weights.
 WEIGHTED_INDICATORS = list(DEFAULT_RENKO_CHART_SELECT_WEIGHTS.keys())
@@ -101,14 +102,15 @@ def progress_iter(iterable, total: int | None = None, desc: str = ""):
 
 
 def parse_args() -> Args:
+    default = BacktestConfig()
     parser = argparse.ArgumentParser(description="Analyze v1 indicator attribution with controlled comparisons.")
     parser.add_argument("--start-date", default=DEFAULT_START_DATE)
     parser.add_argument("--end-date", default=DEFAULT_END_DATE)
     parser.add_argument("--strategy", default=DEFAULT_STRATEGY)
-    parser.add_argument("--txt-dir", type=Path, default=Path("data"))
-    parser.add_argument("--market-cache-dir", type=Path, default=Path("data/market_cache/daily_bars_by_symbol"))
-    parser.add_argument("--pools-dir", type=Path, default=Path("pools"))
-    parser.add_argument("--output", type=Path, default=Path(DEFAULT_OUTPUT))
+    parser.add_argument("--txt-dir", type=Path, default=default.txt_dir)
+    parser.add_argument("--market-cache-dir", type=Path, default=default.market_cache_dir)
+    parser.add_argument("--pools-dir", type=Path, default=default.pools_dir)
+    parser.add_argument("--output", type=Path, default=default.output_dir / DEFAULT_OUTPUT_NAME)
     parser.add_argument("--rebuild-pool", action="store_true", help="Force selector.py to rebuild the pool range.")
     ns = parser.parse_args()
     return Args(

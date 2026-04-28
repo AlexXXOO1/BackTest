@@ -9,7 +9,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from data_store import MarketDataStore
+from config import BacktestConfig
+from core.data_store import MarketDataStore
 
 
 # Common encodings for TDX / Windows exported TXT files.
@@ -25,9 +26,10 @@ ENCODING_CANDIDATES = [
 
 
 def parse_args():
+    default = BacktestConfig()
     parser = argparse.ArgumentParser(description="Import TDX TXT files into the standard market cache.")
-    parser.add_argument("--txt-dir", type=Path, default=Path("data"))
-    parser.add_argument("--market-cache-dir", type=Path, default=Path("data/market_cache/daily_bars_by_symbol"))
+    parser.add_argument("--txt-dir", type=Path, default=default.txt_dir)
+    parser.add_argument("--market-cache-dir", type=Path, default=default.market_cache_dir)
     parser.add_argument("--start-date", type=str, default=None)
     parser.add_argument("--end-date", type=str, default=None)
     parser.add_argument("--overwrite", action="store_true")

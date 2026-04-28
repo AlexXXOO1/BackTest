@@ -8,18 +8,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from data_store import MarketDataStore
-from indicator_store import IndicatorStore
-from pool_store import PoolStore, build_pool_from_indicators
+from core.data_store import MarketDataStore
+from core.indicator_store import IndicatorStore
+from core.pool_store import PoolStore, build_pool_from_indicators
 from selection_strategies import SELECTION_STRATEGY_REGISTRY
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Build a single-file selection pool from the indicator cache.")
-    parser.add_argument("--txt-dir", type=Path, default=Path("data"))
-    parser.add_argument("--market-cache-dir", type=Path, default=Path("data/market_cache/daily_bars_by_symbol"))
-    parser.add_argument("--indicator-cache-path", type=Path, default=Path("data/indicator_cache/daily_indicators.parquet"))
-    parser.add_argument("--pools-dir", type=Path, default=Path("pools"))
+    parser.add_argument("--txt-dir", type=Path, default=default.txt_dir)
+    parser.add_argument("--market-cache-dir", type=Path, default=default.market_cache_dir)
+    parser.add_argument("--indicator-cache-path", type=Path, default=default.indicator_cache_path)
+    parser.add_argument("--pools-dir", type=Path, default=default.pools_dir)
     parser.add_argument("--strategy", type=str, default="renko_chart_select_strategy_v0", choices=sorted(SELECTION_STRATEGY_REGISTRY))
     parser.add_argument("--start-date", type=str, required=True)
     parser.add_argument("--end-date", type=str, required=True)
