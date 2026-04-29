@@ -25,6 +25,6 @@ class BacktestConfig:
     slippage_rate: float = 0.0
     n1: int = 4
     n2: int = 6
-    selection_strategy: str = "renko_chart_select_strategy_v1"
+    selection_strategy: str = "renko_chart_select_strategy_v3"
     trade_strategy: str = "renko_trade_strategy_v0"
     max_workers: int = max(1, (os.cpu_count() or 2) - 8)
