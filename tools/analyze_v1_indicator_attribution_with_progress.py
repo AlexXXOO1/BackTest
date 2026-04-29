@@ -24,7 +24,13 @@ Why this controls variables:
     - The same signal dates are used for paired comparison where both True and False exist.
     - No future condition is used to decide whether a row enters the analysis sample.
 """
+import sys
+from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from dataclasses import replace
 import argparse
 import subprocess
 import sys
