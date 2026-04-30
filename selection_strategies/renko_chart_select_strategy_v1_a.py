@@ -1,20 +1,15 @@
 from __future__ import annotations
 
 """
-Renko chart selection strategy v1.
+Renko chart selection strategy v1_a.
 
-This strategy is based on renko_chart_select_strategy_v0 and adds
-one J-value filter.
-
-Hard selection rules:
-1. hard_brick_turn_strong must be true.
-2. J condition must be true:
-   - j < 0, or
-   - 30 <= j <= 50
+Copy-edit workflow:
+1. Copy this file.
+2. Change STRATEGY_NAME.
+3. Edit only the "Strategy condition block" and final selected rule.
 
 Final selected rule:
-selected = hard_brick_turn_strong AND (j < 0 OR 30 <= j <= 50)
-
+selected = hard_brick_turn_strong AND (J < 0 OR 30 <= J <= 50)
 """
 
 import pandas as pd
@@ -23,106 +18,90 @@ from indicators import add_all_indicators
 
 STRATEGY_NAME = "renko_chart_select_strategy_v1_a"
 
+REQUIRED_INDICATOR_COLUMNS: set[str] = {
+    "date", "open", "high", "low", "close", "volume",
+    "brick_value", "brick_prev_1", "brick_prev_2",
+    "current_red_height", "previous_green_height", "J",
+}
 
-J_COLUMN_CANDIDATES: tuple[str, ...] = (
-    "j",
-    "J",
-    "kdj_j",
-    "KDJ_J",
-    "kdj_J",
-    "KDJJ",
-)
+# =============================================================================
+# Strategy condition block
+# Edit this block when creating a new strategy version.
+# =============================================================================
+BRICK_REVERSAL_RATIO = 0.70
+J_RANGE_LOW = 30.0
+J_RANGE_HIGH = 50.0
 
 
-def _find_j_column(df: pd.DataFrame) -> str:
-    """
-    Return the KDJ J column name from the dataframe.
-
-    Different project versions may use different J column names, so this helper
-    keeps the strategy compatible as long as one common J column exists.
-    """
-    for col in J_COLUMN_CANDIDATES:
+def find_j_column(df: pd.DataFrame) -> str:
+    """Return the KDJ J column name from common project naming variants."""
+    candidates = ("J", "j", "kdj_j", "KDJ_J", "kdj_J", "j_value", "J_VALUE", "KDJJ")
+    for col in candidates:
         if col in df.columns:
             return col
-
-    raise KeyError(
-        "Cannot find KDJ J column. Expected one of: "
-        + ", ".join(J_COLUMN_CANDIDATES)
-    )
+    raise KeyError("Cannot find KDJ J column. Expected one of: " + ", ".join(candidates))
 
 
-def add_j_range_condition(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add the J range condition used by this strategy.
-
-    J condition:
-    - j < 0, or
-    - 30 <= j <= 50
-
-    Output columns:
-    - j_lt_0: True when J is below 0.
-    - j_30_to_50: True when J is between 30 and 50, inclusive.
-    - j_condition_pass: True when either j_lt_0 or j_30_to_50 is true.
-    - j_momentum_or_low: backward-compatible alias for older scripts.
-    - j_condition_rule: documents the active J rule.
-    - j_condition_source_col: records which J column was used.
-    """
+def add_strategy_conditions(df: pd.DataFrame) -> pd.DataFrame:
+    """Add every boolean condition used by this strategy."""
     out = df.copy()
-    j_col = _find_j_column(out)
+    brick_value = pd.to_numeric(out["brick_value"], errors="coerce")
+    brick_prev_1 = pd.to_numeric(out["brick_prev_1"], errors="coerce")
+    brick_prev_2 = pd.to_numeric(out["brick_prev_2"], errors="coerce")
+    current_red_height = pd.to_numeric(out["current_red_height"], errors="coerce")
+    previous_green_height = pd.to_numeric(out["previous_green_height"], errors="coerce")
+
+    out["red_brick"] = brick_value > brick_prev_1
+    out["green_brick"] = brick_value < brick_prev_1
+    out["green_to_red"] = (~out["red_brick"].shift(1).fillna(False).astype(bool)) & out["red_brick"]
+    out["valid_red_brick"] = brick_value > 0
+    out["valid_previous_green_brick"] = brick_prev_2 > brick_prev_1
+    out["valid_green_brick"] = out["valid_previous_green_brick"]
+    out["brick_reversal_strength"] = current_red_height >= previous_green_height * BRICK_REVERSAL_RATIO
+    out["hard_brick_turn_strong"] = (
+        out["green_to_red"]
+        & out["valid_red_brick"]
+        & out["valid_previous_green_brick"]
+        & out["brick_reversal_strength"]
+    ).fillna(False)
+
+    j_col = find_j_column(out)
     j_value = pd.to_numeric(out[j_col], errors="coerce")
-
     out["j_lt_0"] = j_value < 0
-    out["j_30_to_50"] = (j_value >= 30) & (j_value <= 50)
+    out["j_30_to_50"] = (j_value >= J_RANGE_LOW) & (j_value <= J_RANGE_HIGH)
     out["j_condition_pass"] = out["j_lt_0"] | out["j_30_to_50"]
-
-    # Backward-compatible alias.
-    out["j_momentum_or_low"] = out["j_condition_pass"]
-
     out["j_condition_rule"] = "j_lt_0_or_j_30_to_50"
     out["j_condition_source_col"] = j_col
-
     return out
 
 
-def select_renko_chart(
-    df: pd.DataFrame,
-    n1: int = 4,
-    n2: int = 6,
-    **kwargs,
-) -> pd.DataFrame:
-    """
-    Build the v2_renko_j_range selection result.
-
-    Final selected rule:
-    selected = hard_brick_turn_strong AND j_condition_pass
-
-    This strategy intentionally keeps only:
-    - Renko chart turning strong.
-    - J below 0 or J between 30 and 50.
-
-    """
-    required_indicator_columns = {
-        "hard_brick_turn_strong",
-    }
-
-    if required_indicator_columns.issubset(set(df.columns)):
-        out = df.copy().sort_values("date").reset_index(drop=True)
-    else:
-        out = add_all_indicators(df, n1=n1, n2=n2, **kwargs)
-
-    out = add_j_range_condition(out)
-
+def add_final_selection(df: pd.DataFrame) -> pd.DataFrame:
+    """Final selected rule for v1_a."""
+    out = df.copy()
     out["condition6_hard_pass"] = out["j_condition_pass"].fillna(False).astype(bool)
-
     out["selected_score_base"] = (
         out["hard_brick_turn_strong"].fillna(False).astype(bool)
         & out["condition6_hard_pass"]
     ).astype(int)
-
     out["selected"] = out["selected_score_base"]
+    return out
 
+
+# =============================================================================
+# Strategy execution wrapper
+# Usually no need to edit below this line when creating a similar strategy.
+# =============================================================================
+def _prepare_indicators(df: pd.DataFrame, n1: int, n2: int, **kwargs) -> pd.DataFrame:
+    if REQUIRED_INDICATOR_COLUMNS.issubset(set(df.columns)):
+        return df.copy().sort_values("date").reset_index(drop=True)
+    return add_all_indicators(df, n1=n1, n2=n2, **kwargs)
+
+
+def select_renko_chart(df: pd.DataFrame, n1: int = 4, n2: int = 6, **kwargs) -> pd.DataFrame:
+    out = _prepare_indicators(df, n1=n1, n2=n2, **kwargs)
+    out = add_strategy_conditions(out)
+    out = add_final_selection(out)
     out["selection_strategy"] = STRATEGY_NAME
-
     return out
 
 
