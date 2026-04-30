@@ -33,7 +33,7 @@ Changes from renko_chart_select_strategy_v0:
    - close_below_short_trend_cap: 1.5
    - price_below_50: 0.8
    - j_momentum_or_low: 2.5
-   - close_above_yellow_ma: 0.3
+   - above_yellow_ma: 0.3
    - surge_then_shrink_pullback: -2.0
    - small_rise_long_red_brick: 3.0
    - prior_20d_accelerated_huge_volume_bear: -1.5
@@ -75,7 +75,7 @@ DEFAULT_RENKO_CHART_SELECT_WEIGHTS: dict[str, float] = {
 
     # Condition 7: not strong enough in the latest attribution result.
     # Keep it only as a weak reference factor.
-    "close_above_yellow_ma": 0.3,
+    "above_yellow_ma": 0.3,
 
     # Condition 8: clearly negative attribution result.
     # Use a negative weight instead of deleting the column, so it remains measurable.
@@ -127,7 +127,7 @@ def add_strategy_score(
     - close_below_short_trend_cap: 1.5
     - price_below_50: 0.8
     - j_momentum_or_low: 2.5
-    - close_above_yellow_ma: 0.3
+    - above_yellow_ma: 0.3
     - surge_then_shrink_pullback: -2.0
     - small_rise_long_red_brick: 3.0
     - prior_20d_accelerated_huge_volume_bear: -1.5
@@ -238,7 +238,7 @@ def select_renko_chart(
         "close_below_short_trend_cap",
         "price_below_50",
         "j_momentum_or_low",
-        "close_above_yellow_ma",
+        "above_yellow_ma",
         "surge_then_shrink_pullback",
         "small_rise_long_red_brick",
         *RENKO_CHART_RISK_RULE_COLUMNS,

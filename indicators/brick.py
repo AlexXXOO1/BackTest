@@ -57,9 +57,11 @@ def add_brick_indicators(df: pd.DataFrame, n1: int = 4, n2: int = 6) -> pd.DataF
     df["green_height_70pct"] = df["previous_green_height"] * 0.7
     df["brick_reversal_strength"] = df["current_red_height"] > df["green_height_70pct"]
     df["hard_brick_turn_strong"] = (
-        df["green_to_red"]
-        & df["valid_red_brick"]
-        & df["valid_green_brick"]
-        & df["brick_reversal_strength"]
+    (prev2 > prev1)
+    & (prev1 < df["brick_value"])
+    & (
+        df["brick_value"]
+        > prev1 + (prev2 - prev1) * 0.7
     )
+)
     return df

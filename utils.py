@@ -155,11 +155,7 @@ MAIN_BOARD_PREFIXES = (
 )
 
 EXCLUDED_PREFIXES = (
-    "SZ#300",
-    "SZ#301",
-    "SH#688",
-    "SH#689",
-    "BJ#",
+    
 )
 
 

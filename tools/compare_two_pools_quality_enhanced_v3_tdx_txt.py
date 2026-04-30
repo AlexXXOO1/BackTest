@@ -91,13 +91,65 @@ def detect_col(cols: Iterable[str], candidates: list[str]) -> Optional[str]:
             return c
     return None
 
+def parse_date_series(raw: pd.Series) -> pd.Series:
+    """
+    Parse date column safely.
 
+    Supports:
+    - YYYY-MM-DD
+    - YYYY/MM/DD
+    - YYYYMMDD
+    - DD/MM/YYYY
+    - DD-MM-YYYY
+    """
+    raw = raw.astype(str).str.strip()
+
+    # First try common Chinese stock data format: YYYY-MM-DD / YYYY/MM/DD
+    out = pd.to_datetime(raw, format="%Y-%m-%d", errors="coerce")
+
+    mask = out.isna()
+    if mask.any():
+        out.loc[mask] = pd.to_datetime(
+            raw.loc[mask],
+            format="%Y/%m/%d",
+            errors="coerce",
+        )
+
+    # Try compact date: YYYYMMDD
+    mask = out.isna()
+    if mask.any():
+        out.loc[mask] = pd.to_datetime(
+            raw.loc[mask],
+            format="%Y%m%d",
+            errors="coerce",
+        )
+
+    # Try day-first format: DD/MM/YYYY
+    mask = out.isna()
+    if mask.any():
+        out.loc[mask] = pd.to_datetime(
+            raw.loc[mask],
+            format="%d/%m/%Y",
+            errors="coerce",
+        )
+
+    # Try day-first format: DD-MM-YYYY
+    mask = out.isna()
+    if mask.any():
+        out.loc[mask] = pd.to_datetime(
+            raw.loc[mask],
+            format="%d-%m-%Y",
+            errors="coerce",
+        )
+
+    return out
 def parse_mixed_date(s: pd.Series) -> pd.Series:
     """Parse dates from formats such as 2025-04-01, 20250401, and TDX DD/MM/YYYY."""
     raw = s.astype(str).str.strip()
     raw = raw.str.replace("\ufeff", "", regex=False)
 
-    out = pd.to_datetime(raw, errors="coerce")
+    out = parse_date_series(raw)
+    
 
     # TDX export sample uses DD/MM/YYYY, e.g. 02/08/2021.
     slash_mask = raw.str.match(r"^\d{1,2}/\d{1,2}/\d{4}$", na=False)

@@ -1,21 +1,15 @@
 from __future__ import annotations
 
 """
-Renko chart selection strategy v2.
+Renko chart selection strategy v1_b.
 
-This strategy is based on renko_chart_select_strategy_v1_b and adds one
-extra hard condition:
-
-- long red brick with low price increase.
+This strategy uses hard selection conditions only.
 
 Final rule:
 1. T0 hard_brick_turn_strong must be true.
 2. J confirmation must be true:
    - T0 J is below 14, or
    - T-1 J is greater than T-2 J.
-3. Small price rise with long red brick must be true:
-   - T0 daily return is not too high.
-   - T0 current red brick height is large enough.
 
 Definitions:
 - T0 is the day when hard_brick_turn_strong is true.
@@ -31,7 +25,7 @@ import pandas as pd
 
 from indicators import add_all_indicators
 
-STRATEGY_NAME = "renko_chart_select_strategy_v2"
+STRATEGY_NAME = "renko_chart_select_strategy_v1_b"
 
 
 def _find_j_column(df: pd.DataFrame) -> str:
@@ -66,31 +60,14 @@ def _find_j_column(df: pd.DataFrame) -> str:
     )
 
 
-def _ensure_return_column(out: pd.DataFrame) -> pd.DataFrame:
-    """
-    Ensure daily return percentage column exists.
-
-    daily_return_pct = close / previous_close - 1, then multiplied by 100.
-    """
-    out = out.copy()
-
-    if "daily_return_pct" not in out.columns:
-        close = pd.to_numeric(out["close"], errors="coerce")
-        out["daily_return_pct"] = (close / close.shift(1) - 1.0) * 100.0
-
-    return out
-
-
 def select_renko_chart(
     df: pd.DataFrame,
     n1: int = 4,
     n2: int = 6,
-    max_daily_return_pct: float = 3.0,
-    min_current_red_height: float = 8.0,
     **kwargs,
 ) -> pd.DataFrame:
     """
-    Build the v2 selection result.
+    Build the selection result.
 
     Final selected rule:
     selected = hard_brick_turn_strong
@@ -100,17 +77,11 @@ def select_renko_chart(
                    OR
                    T-1 J > T-2 J
                )
-               AND
-               small_rise_long_red_brick_v2
 
     Quant details:
     - hard_brick_turn_strong:
       Comes from indicators.add_all_indicators().
-      In brick.py, it is based on:
-      green_to_red
-      AND valid_red_brick
-      AND valid_green_brick
-      AND brick_reversal_strength.
+      It represents the renko chart turning strong on T0.
 
     - j_t0_below_14:
       True when:
@@ -124,28 +95,6 @@ def select_renko_chart(
       True when:
           j_t0_below_14 OR j_tminus1_rise_vs_tminus2
 
-    - daily_return_pct:
-      True price return on T0:
-          close_T0 / close_T-1 - 1
-
-    - small_price_rise:
-      True when:
-          daily_return_pct <= max_daily_return_pct
-
-      Default:
-          max_daily_return_pct = 3.0
-
-    - long_red_brick:
-      True when:
-          current_red_height >= min_current_red_height
-
-      Default:
-          min_current_red_height = 8.0
-
-    - small_rise_long_red_brick_v2:
-      True when:
-          small_price_rise AND long_red_brick
-
     This strategy intentionally does not use:
     - Weighted scores.
     - score_pct.
@@ -155,15 +104,12 @@ def select_renko_chart(
     """
     required_indicator_columns = {
         "hard_brick_turn_strong",
-        "current_red_height",
     }
 
     if required_indicator_columns.issubset(set(df.columns)):
         out = df.copy().sort_values("date").reset_index(drop=True)
     else:
         out = add_all_indicators(df, n1=n1, n2=n2, **kwargs)
-
-    out = _ensure_return_column(out)
 
     j_col = _find_j_column(out)
 
@@ -178,25 +124,9 @@ def select_renko_chart(
         | out["j_tminus1_rise_vs_tminus2"].astype(bool)
     )
 
-    out["small_price_rise"] = (
-        pd.to_numeric(out["daily_return_pct"], errors="coerce")
-        <= max_daily_return_pct
-    ).fillna(False)
-
-    out["long_red_brick"] = (
-        pd.to_numeric(out["current_red_height"], errors="coerce")
-        >= min_current_red_height
-    ).fillna(False)
-
-    out["small_rise_long_red_brick_v2"] = (
-        out["small_price_rise"].astype(bool)
-        & out["long_red_brick"].astype(bool)
-    )
-
     out["selected_score_base"] = (
         out["hard_brick_turn_strong"].fillna(False).astype(bool)
         & out["j_low_or_tminus_rise"].astype(bool)
-        & out["small_rise_long_red_brick_v2"].astype(bool)
     ).astype(int)
 
     out["selected"] = out["selected_score_base"]

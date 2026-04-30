@@ -3,17 +3,17 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
 from config import BacktestConfig
+
 from core.data_store import MarketDataStore
 from core.indicator_store import IndicatorStore
 
 
 def parse_args():
+    default = BacktestConfig()
     parser = argparse.ArgumentParser(description="Build reusable daily indicator cache.")
     parser.add_argument("--txt-dir", type=Path, default=default.txt_dir)
     parser.add_argument("--market-cache-dir", type=Path, default=default.market_cache_dir)

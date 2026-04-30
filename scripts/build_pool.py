@@ -13,8 +13,9 @@ from core.indicator_store import IndicatorStore
 from core.pool_store import PoolStore, build_pool_from_indicators
 from selection_strategies import SELECTION_STRATEGY_REGISTRY
 
-
+from config import BacktestConfig
 def parse_args():
+    default = BacktestConfig()
     parser = argparse.ArgumentParser(description="Build a single-file selection pool from the indicator cache.")
     parser.add_argument("--txt-dir", type=Path, default=default.txt_dir)
     parser.add_argument("--market-cache-dir", type=Path, default=default.market_cache_dir)
