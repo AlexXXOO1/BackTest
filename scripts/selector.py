@@ -26,7 +26,23 @@ def parse_args():
     parser.add_argument("--date", type=str, default=None, help="single selection date, for example 2026-03-05")
     parser.add_argument("--start-date", type=str, default=None, help="date")
     parser.add_argument("--end-date", type=str, default=None, help="date")
-    parser.add_argument("--strategy", type=str, default=default.selection_strategy, choices=sorted(SELECTION_STRATEGY_REGISTRY))
+
+    # IMPORTANT:
+    # Do NOT use argparse choices here.
+    # New strategy files should be accepted by command line first,
+    # then validated against SELECTION_STRATEGY_REGISTRY after parsing.
+    # This makes it easier to add new strategies without editing selector.py every time.
+    parser.add_argument(
+        "--strategy",
+        type=str,
+        default=default.selection_strategy,
+        help=(
+            "Selection strategy name. "
+            "Example: thunder_bottom_j_strategy_v0. "
+            "The strategy must be registered in selection_strategies."
+        ),
+    )
+
     parser.add_argument("--n1", type=int, default=default.n1)
     parser.add_argument("--n2", type=int, default=default.n2)
     parser.add_argument("--max-workers", type=int, default=default.max_workers)
@@ -36,7 +52,57 @@ def parse_args():
         action="store_true",
         help="Print path, cache, indicator, and final pool diagnostics after building the pool.",
     )
+    parser.add_argument(
+        "--list-strategies",
+        action="store_true",
+        help="List registered selection strategies and exit.",
+    )
     return parser.parse_args()
+
+
+def _print_registered_strategies() -> None:
+    print("\n========== REGISTERED SELECTION STRATEGIES ==========")
+    if not SELECTION_STRATEGY_REGISTRY:
+        print("[ERROR] No strategy found in SELECTION_STRATEGY_REGISTRY.")
+    else:
+        for name in sorted(SELECTION_STRATEGY_REGISTRY):
+            print(f"  - {name}")
+    print("====================================================\n")
+
+
+def _validate_strategy_name(strategy_name: str) -> None:
+    """
+    Validate strategy name after argparse parsing.
+
+    This replaces argparse choices, so command line no longer blocks new names
+    before we can print a clearer error message.
+    """
+    if strategy_name in SELECTION_STRATEGY_REGISTRY:
+        return
+
+    print("\n[ERROR] Selection strategy is not registered.")
+    print(f"[ERROR] Requested strategy: {strategy_name}")
+    print("\n[ERROR] Registered strategies:")
+    if SELECTION_STRATEGY_REGISTRY:
+        for name in sorted(SELECTION_STRATEGY_REGISTRY):
+            print(f"  - {name}")
+    else:
+        print("  <empty registry>")
+
+    print("\n[FIX SUGGESTIONS]")
+    print("1. Make sure your strategy file is located in:")
+    print("   selection_strategies/")
+    print("2. Make sure the file name matches the strategy name, for example:")
+    print("   selection_strategies/thunder_bottom_j_strategy_v0.py")
+    print("3. Make sure the strategy file contains:")
+    print('   STRATEGY_NAME = "thunder_bottom_j_strategy_v0"')
+    print("4. Make sure selection_strategies/__init__.py supports auto-discovery,")
+    print("   or manually imports and registers the new strategy.")
+    print("5. You can run this command to list registered strategies:")
+    print("   python .\\scripts\\selector.py --list-strategies")
+    print()
+
+    raise SystemExit(2)
 
 
 def _count_files(path: Path, pattern: str) -> int:
@@ -62,7 +128,26 @@ def _as_bool_series(s: pd.Series) -> pd.Series:
     return s.fillna(0).astype(bool)
 
 
-def _print_df_summary(df: pd.DataFrame, name: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> None:
+def _print_condition_count(
+    df: pd.DataFrame,
+    in_range: pd.DataFrame,
+    col: str,
+) -> None:
+    if col in df.columns:
+        total_count = int(_as_bool_series(df[col]).sum())
+        range_count = int(_as_bool_series(in_range[col]).sum()) if col in in_range.columns else 0
+        print(f"[DEBUG] {col}=true total: {total_count:,}")
+        print(f"[DEBUG] {col}=true in range: {range_count:,}")
+    else:
+        print(f"[DEBUG] {col}: missing")
+
+
+def _print_df_summary(
+    df: pd.DataFrame,
+    name: str,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+) -> None:
     print(f"\n[DEBUG] {name}")
     print(f"[DEBUG] rows: {len(df):,}")
 
@@ -88,14 +173,34 @@ def _print_df_summary(df: pd.DataFrame, name: str, start_date: pd.Timestamp, end
     else:
         print("[DEBUG] symbol column: not found")
 
-    for col in ("hard_brick_turn_strong", "selected", "selected_score_base"):
-        if col in df.columns:
-            total_count = int(_as_bool_series(df[col]).sum())
-            range_count = int(_as_bool_series(in_range[col]).sum()) if col in in_range.columns else 0
-            print(f"[DEBUG] {col}=true total: {total_count:,}")
-            print(f"[DEBUG] {col}=true in range: {range_count:,}")
-        else:
-            print(f"[DEBUG] {col}: missing")
+    # Common old strategy columns + new thunder bottom strategy columns.
+    condition_cols = [
+        # Old renko strategy columns.
+        "hard_brick_turn_strong",
+        "selected_score_base",
+
+        # Generic final column.
+        "selected",
+
+        # Thunder bottom J strategy columns.
+        "absolute_bottom_event",
+        "prior_abs_bottom_seen",
+        "has_valid_post_abs_rebound",
+        "pullback_after_abs_bottom",
+        "relative_bottom_after_abs_bottom",
+        "j_low_position",
+        "j_near_recent_low",
+        "j_turn_up",
+        "j_confirm_relative_low",
+        "bottom_position_ok",
+        "sudden_thunder_move",
+        "big_bull_volume_bar",
+        "scary_key_position",
+        "base_filter_ok",
+    ]
+
+    for col in condition_cols:
+        _print_condition_count(df, in_range, col)
 
     if "date" in in_range.columns:
         date_col = pd.to_datetime(in_range["date"], errors="coerce")
@@ -147,6 +252,13 @@ def print_debug_summary(config: BacktestConfig) -> None:
 
 def main() -> None:
     args = parse_args()
+
+    if args.list_strategies:
+        _print_registered_strategies()
+        return
+
+    _validate_strategy_name(args.strategy)
+
     if args.date:
         start_date = end_date = pd.Timestamp(args.date)
     else:
@@ -166,6 +278,7 @@ def main() -> None:
         n2=args.n2,
         max_workers=args.max_workers,
     )
+
     run_selector(config, overwrite=args.overwrite)
 
     if args.debug_summary:

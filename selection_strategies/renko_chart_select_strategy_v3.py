@@ -1,23 +1,59 @@
 from __future__ import annotations
 
 """
-daily_return_pct <= 3：无效
-daily_return_pct > 3：有效
-3 < daily_return_pct <= 7：综合最好 SELECTED
-3 < daily_return_pct <= 5：有效但收益低于 3-7 
-5 < daily_return_pct <= 7：收益最高但样本偏少
+Renko chart selection strategy v3.
+
+Purpose:
+Test whether close / short_trend < 0.95 improves the 3-7 daily return pool.
+
+Known daily_return_pct findings:
+- daily_return_pct <= 3: ineffective / negative.
+- daily_return_pct > 3: effective.
+- 3 < daily_return_pct <= 7: best overall balance, selected as base range.
+- 3 < daily_return_pct <= 5: effective, but weaker average return than 3-7.
+- 5 < daily_return_pct <= 7: highest average return, but sample size is smaller.
+
+Known red brick length findings:
+- current_red_height >= 8: not suitable as a main hard filter.
+- current_red_height >= 6: not suitable as a main hard filter.
+- current_red_height >= previous_green_height * 1.0: negative as a hard filter.
+
+Known short trend findings:
+- close >= short_trend was negative as a hard filter.
+- close < short_trend was strongly positive.
+- Bucket analysis showed that close / short_trend < 0.95 performed better
+  than merely requiring close < short_trend.
+
+Final selected rule:
+selected =
+    hard_brick_turn_strong
+    AND 3 < daily_return_pct <= 7
+    AND close / short_trend < 0.95
+
+Meaning:
+The stock must satisfy the base 3-7 price rise pool,
+and the close price must still be meaningfully below the short trend line.
+
+Important:
+This strategy recalculates the short-trend ratio directly from:
+    close_to_short_trend = close / short_trend
+
+It does NOT rely on the old close_below_short_trend_cap column,
+because that column may be None / NaN in historical pool files.
 """
 
 import pandas as pd
 
 from indicators import add_all_indicators
 
-STRATEGY_NAME = "renko_chart_select_strategy_v2"
+
+STRATEGY_NAME = "renko_chart_select_strategy_v3"
 
 REQUIRED_INDICATOR_COLUMNS: set[str] = {
     "date", "open", "high", "low", "close", "volume",
     "brick_value", "brick_prev_1", "brick_prev_2",
     "current_red_height", "previous_green_height", "daily_return_pct",
+    "short_trend",
 }
 
 # =============================================================================
@@ -25,21 +61,22 @@ REQUIRED_INDICATOR_COLUMNS: set[str] = {
 # Edit this block when creating a new strategy version.
 # =============================================================================
 
+# Basic brick reversal strength used inside hard_brick_turn_strong.
+# This is the baseline reversal definition:
+# current_red_height >= previous_green_height * 0.70
 BRICK_REVERSAL_RATIO = 0.70
 
 # T0 daily return lower bound.
-# Example:
 # 3.0 means daily_return_pct must be > 3.0
 DEFAULT_MIN_DAILY_RETURN_PCT = 3.0
 
 # T0 daily return upper bound.
-# Example:
-# 7.0 means daily_return_pct must be < 7.0
+# 7.0 means daily_return_pct must be <= 7.0
 DEFAULT_MAX_DAILY_RETURN_PCT = 7.0
 
-# T0 current red brick height must be long enough.
-# Currently not enabled in final filter unless you uncomment it below.
-DEFAULT_MIN_CURRENT_RED_HEIGHT = 8.0
+# Short trend ratio upper bound.
+# 0.95 means close / short_trend must be < 0.95
+DEFAULT_MAX_CLOSE_TO_SHORT_TREND = 0.95
 
 
 def add_strategy_conditions(
@@ -47,7 +84,7 @@ def add_strategy_conditions(
     *,
     min_daily_return_pct: float = DEFAULT_MIN_DAILY_RETURN_PCT,
     max_daily_return_pct: float = DEFAULT_MAX_DAILY_RETURN_PCT,
-    min_current_red_height: float = DEFAULT_MIN_CURRENT_RED_HEIGHT,
+    max_close_to_short_trend: float = DEFAULT_MAX_CLOSE_TO_SHORT_TREND,
 ) -> pd.DataFrame:
     """Add every boolean condition used by this strategy."""
     out = df.copy()
@@ -58,9 +95,11 @@ def add_strategy_conditions(
     current_red_height = pd.to_numeric(out["current_red_height"], errors="coerce")
     previous_green_height = pd.to_numeric(out["previous_green_height"], errors="coerce")
     daily_return_pct = pd.to_numeric(out["daily_return_pct"], errors="coerce")
+    close = pd.to_numeric(out["close"], errors="coerce")
+    short_trend = pd.to_numeric(out["short_trend"], errors="coerce")
 
     # -------------------------------------------------------------------------
-    # Brick reversal condition
+    # Basic brick reversal condition
     # -------------------------------------------------------------------------
     out["red_brick"] = brick_value > brick_prev_1
     out["green_brick"] = brick_value < brick_prev_1
@@ -87,7 +126,8 @@ def add_strategy_conditions(
 
     # -------------------------------------------------------------------------
     # T0 daily return range condition
-    # Generic naming: no hard-coded 3_7 naming.
+    # Base range:
+    # 3 < daily_return_pct <= 7
     # -------------------------------------------------------------------------
     out["price_rise_above_min"] = (
         daily_return_pct > min_daily_return_pct
@@ -103,30 +143,60 @@ def add_strategy_conditions(
     ).fillna(False)
 
     # -------------------------------------------------------------------------
-    # Long red brick condition
-    # Currently calculated but not enabled in final filter by default.
+    # Short trend ratio condition
+    #
+    # Do not use old close_below_short_trend_cap directly.
+    # Your existing v2 pool showed:
+    # close_below_short_trend_cap = None for all rows.
+    #
+    # Here we recalculate:
+    #
+    # close_to_short_trend = close / short_trend
+    #
+    # Final test condition:
+    # close_to_short_trend < 0.95
+    #
+    # This tests whether stocks that are still meaningfully below short_trend
+    # have better forward returns.
     # -------------------------------------------------------------------------
-    out["long_red_brick"] = (
-        current_red_height >= min_current_red_height
+    out["close_to_short_trend"] = close / short_trend
+
+    out["close_to_short_trend_below_limit"] = (
+        (short_trend > 0)
+        & out["close_to_short_trend"].notna()
+        & (out["close_to_short_trend"] < max_close_to_short_trend)
     ).fillna(False)
 
-    # Main configurable range filter.
-    # If you want to also require long red brick, uncomment the second line.
-    out["price_rise_range_filter"] = (
+    # Diagnostic columns.
+    out["below_short_trend"] = (
+        (short_trend > 0)
+        & out["close_to_short_trend"].notna()
+        & (out["close_to_short_trend"] < 1.0)
+    ).fillna(False)
+
+    out["not_below_short_trend"] = (
+        (short_trend > 0)
+        & out["close_to_short_trend"].notna()
+        & (out["close_to_short_trend"] >= 1.0)
+    ).fillna(False)
+
+    out["close_below_short_trend_cap_calc"] = out["below_short_trend"]
+
+    out["price_rise_range_and_close_to_short_trend_below_limit"] = (
         out["price_rise_in_range"].astype(bool)
-        # & out["long_red_brick"].astype(bool)
+        & out["close_to_short_trend_below_limit"].astype(bool)
     ).fillna(False)
 
     return out
 
 
 def add_final_selection(df: pd.DataFrame) -> pd.DataFrame:
-    """Final selected rule for v2."""
+    """Final selected rule for v3."""
     out = df.copy()
 
     out["selected_score_base"] = (
         out["hard_brick_turn_strong"].fillna(False).astype(bool)
-        & out["price_rise_range_filter"].fillna(False).astype(bool)
+        & out["price_rise_range_and_close_to_short_trend_below_limit"].fillna(False).astype(bool)
     ).astype(int)
 
     out["selected"] = out["selected_score_base"]
@@ -152,7 +222,7 @@ def select_renko_chart(
     n2: int = 6,
     min_daily_return_pct: float = DEFAULT_MIN_DAILY_RETURN_PCT,
     max_daily_return_pct: float = DEFAULT_MAX_DAILY_RETURN_PCT,
-    min_current_red_height: float = DEFAULT_MIN_CURRENT_RED_HEIGHT,
+    max_close_to_short_trend: float = DEFAULT_MAX_CLOSE_TO_SHORT_TREND,
     **kwargs,
 ) -> pd.DataFrame:
     out = _prepare_indicators(df, n1=n1, n2=n2, **kwargs)
@@ -161,7 +231,7 @@ def select_renko_chart(
         out,
         min_daily_return_pct=min_daily_return_pct,
         max_daily_return_pct=max_daily_return_pct,
-        min_current_red_height=min_current_red_height,
+        max_close_to_short_trend=max_close_to_short_trend,
     )
 
     out = add_final_selection(out)
