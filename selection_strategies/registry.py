@@ -1,15 +1,26 @@
 """
 Selection strategy registry.
 
-This module automatically discovers selection strategy modules under the
-selection_strategies package.
+Auto-discover all Python files under selection_strategies/.
 
-A strategy module will be registered automatically if it defines:
-
+A strategy module is registered automatically when it defines:
     STRATEGY_NAME = "your_strategy_name"
-    SELECT_FUNC = your_select_function
 
-This avoids manually editing the registry every time a new strategy file is added.
+The entry function is resolved in this order:
+    1. SELECT_FUNC
+    2. select_strategy
+    3. select
+    4. select_renko_chart
+    5. select_stocks
+    6. run_strategy
+
+Recommended new style:
+    STRATEGY_NAME = "my_strategy"
+
+    def select_strategy(df):
+        ...
+
+    SELECT_FUNC = select_strategy
 """
 
 from __future__ import annotations
@@ -19,10 +30,27 @@ import pkgutil
 from typing import Callable, Dict
 
 
-SELECTION_STRATEGY_REGISTRY: Dict[str, Callable] = {}
+ENTRY_FUNC_CANDIDATES: tuple[str, ...] = (
+    "SELECT_FUNC",
+    "select_strategy",
+    "select",
+    "select_renko_chart",
+    "select_stocks",
+    "run_strategy",
+)
 
 
-def _discover_selection_strategies() -> Dict[str, Callable]:
+def _resolve_select_func(module) -> Callable | None:
+    """Resolve a strategy entry function without forcing a specific function name."""
+    for attr_name in ENTRY_FUNC_CANDIDATES:
+        func = getattr(module, attr_name, None)
+        if callable(func):
+            return func
+    return None
+
+
+def discover_selection_strategies(verbose: bool = False) -> Dict[str, Callable]:
+    """Auto-discover valid selection strategy modules in this package."""
     registry: Dict[str, Callable] = {}
 
     package_name = __package__
@@ -34,41 +62,56 @@ def _discover_selection_strategies() -> Dict[str, Callable]:
     for module_info in pkgutil.iter_modules(package.__path__):
         module_name = module_info.name
 
-        if module_name.startswith("_"):
+        if module_name.startswith("_") or module_name in {"registry", "common_conditions"}:
             continue
 
-        if module_name in {"registry"}:
-            continue
+        full_module_name = f"{package_name}.{module_name}"
 
-        module = importlib.import_module(f"{package_name}.{module_name}")
+        try:
+            module = importlib.import_module(full_module_name)
+        except Exception as e:
+            if verbose:
+                print(f"[WARN] Skip {full_module_name}: import failed: {type(e).__name__}: {e}")
+            continue
 
         strategy_name = getattr(module, "STRATEGY_NAME", None)
-        select_func = getattr(module, "SELECT_FUNC", None)
-
-        if strategy_name is None or select_func is None:
+        if not strategy_name:
+            if verbose:
+                print(f"[WARN] Skip {full_module_name}: missing STRATEGY_NAME")
             continue
 
-        if not callable(select_func):
-            raise TypeError(f"{module_name}.SELECT_FUNC must be callable.")
+        select_func = _resolve_select_func(module)
+        if select_func is None:
+            if verbose:
+                print(
+                    f"[WARN] Skip {full_module_name}: missing entry function. "
+                    f"Supported names: {', '.join(ENTRY_FUNC_CANDIDATES)}"
+                )
+            continue
 
+        strategy_name = str(strategy_name)
         if strategy_name in registry:
-            raise ValueError(f"Duplicate selection strategy name found: {strategy_name}")
+            raise ValueError(
+                f"Duplicate selection strategy name found: {strategy_name}. "
+                "Please make every STRATEGY_NAME unique."
+            )
 
         registry[strategy_name] = select_func
 
     return registry
 
 
-SELECTION_STRATEGY_REGISTRY = _discover_selection_strategies()
+SELECTION_STRATEGY_REGISTRY: Dict[str, Callable] = discover_selection_strategies(verbose=False)
 
 
 def get_selection_strategy(name: str) -> Callable:
+    """Return one registered strategy function by strategy name."""
     if name not in SELECTION_STRATEGY_REGISTRY:
-        available = ", ".join(sorted(SELECTION_STRATEGY_REGISTRY))
+        available = ", ".join(sorted(SELECTION_STRATEGY_REGISTRY)) or "<none>"
         raise ValueError(f"Unknown selection strategy: {name}. Available: {available}")
-
     return SELECTION_STRATEGY_REGISTRY[name]
 
 
 def list_selection_strategies() -> list[str]:
+    """List all registered selection strategy names."""
     return sorted(SELECTION_STRATEGY_REGISTRY)
