@@ -3,20 +3,28 @@ from __future__ import annotations
 """
 Renko chart selection strategy v0.
 
-Copy-edit workflow:
-1. Copy this file.
-2. Change STRATEGY_NAME.
-3. Edit only the "Strategy condition block" and final selected rule.
+Purpose:
+- Preserve the earliest TongDaXin XG logic as the baseline strategy.
+- Strategy layer only consumes indicator columns and creates selected / score / rank_key.
+- The original TongDaXin formula is implemented in indicators/tdx_renko_xg.py.
 
-Indicator modules only calculate raw values. All selection conditions used by
-this strategy are declared near the top of this file.
+Original TongDaXin selection rule:
+
+条件1 := REF(砖型图,2) > REF(砖型图,1)
+         AND REF(砖型图,1) < 砖型图
+         AND 砖型图 > REF(砖型图,1) + (REF(砖型图,2)-REF(砖型图,1))*0.7;
+
+XG: IF(条件1, 1, 0);
 """
 
 import pandas as pd
 
 from indicators import add_all_indicators
+from indicators.required import require_indicator_columns
+
 
 STRATEGY_NAME = "renko_chart_select_strategy_v0"
+
 
 REQUIRED_INDICATOR_COLUMNS: set[str] = {
     "date",
@@ -28,67 +36,99 @@ REQUIRED_INDICATOR_COLUMNS: set[str] = {
     "brick_value",
     "brick_prev_1",
     "brick_prev_2",
+    "brick_open",
+    "brick_close",
+    "brick_delta",
     "current_red_height",
     "previous_green_height",
+    "tdx_renko_condition1",
+    "tdx_renko_xg",
+    "tdx_renko_xg_int",
 }
 
 
-# =============================================================================
-# Strategy condition block
-# Edit this block when creating a new strategy version.
-# =============================================================================
-BRICK_REVERSAL_RATIO = 0.70
+EXPORT_COLUMNS: list[str] = [
+    "date",
+    "code",
+    "name",
+    "stock_name",
+    "selection_strategy",
+    "selected",
+    "selected_score_base",
+    "score",
+    "score_pct",
+    "score_rank_key",
+    "tdx_renko_condition1",
+    "tdx_renko_xg",
+    "tdx_renko_xg_int",
+    "brick_value",
+    "brick_prev_1",
+    "brick_prev_2",
+    "brick_open",
+    "brick_close",
+    "brick_delta",
+    "current_red_height",
+    "previous_green_height",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+]
 
 
-def add_strategy_conditions(df: pd.DataFrame) -> pd.DataFrame:
-    """Add every boolean condition used by this strategy."""
-    out = df.copy()
-    brick_value = pd.to_numeric(out["brick_value"], errors="coerce")
-    brick_prev_1 = pd.to_numeric(out["brick_prev_1"], errors="coerce")
-    brick_prev_2 = pd.to_numeric(out["brick_prev_2"], errors="coerce")
-    current_red_height = pd.to_numeric(out["current_red_height"], errors="coerce")
-    previous_green_height = pd.to_numeric(out["previous_green_height"], errors="coerce")
-
-    out["red_brick"] = brick_value > brick_prev_1
-    out["green_brick"] = brick_value < brick_prev_1
-    out["green_to_red"] = (~out["red_brick"].shift(1).fillna(False).astype(bool)) & out["red_brick"]
-    out["valid_red_brick"] = brick_value > 0
-    out["valid_previous_green_brick"] = brick_prev_2 > brick_prev_1
-    out["valid_green_brick"] = out["valid_previous_green_brick"]
-    out["brick_reversal_strength"] = current_red_height >= previous_green_height * BRICK_REVERSAL_RATIO
-    out["hard_brick_turn_strong"] = (
-        out["green_to_red"]
-        & out["valid_red_brick"]
-        & out["valid_previous_green_brick"]
-        & out["brick_reversal_strength"]
-    ).fillna(False)
-    return out
-
-
-def add_final_selection(df: pd.DataFrame) -> pd.DataFrame:
-    """Final selected rule: hard_brick_turn_strong."""
-    out = df.copy()
-    out["selected_score_base"] = out["hard_brick_turn_strong"].fillna(False).astype(bool).astype(int)
-    out["selected"] = out["selected_score_base"]
-    return out
-
-
-# =============================================================================
-# Strategy execution wrapper
-# Usually no need to edit below this line when creating a similar strategy.
-# =============================================================================
 def _prepare_indicators(df: pd.DataFrame, n1: int, n2: int, **kwargs) -> pd.DataFrame:
+    """
+    Support both usage modes:
+    1. selector.py passes indicator cache: require all needed columns.
+    2. Direct testing passes raw OHLCV data: calculate indicators first.
+    """
     if REQUIRED_INDICATOR_COLUMNS.issubset(set(df.columns)):
-        return df.copy().sort_values("date").reset_index(drop=True)
-    return add_all_indicators(df, n1=n1, n2=n2, **kwargs)
+        out = df.copy()
+    else:
+        raw_required = {"date", "open", "high", "low", "close", "volume"}
+        if raw_required.issubset(set(df.columns)):
+            out = add_all_indicators(df, n1=n1, n2=n2, **kwargs)
+        else:
+            out = df.copy()
+
+    require_indicator_columns(
+        df=out,
+        required_columns=REQUIRED_INDICATOR_COLUMNS,
+        strategy_name=STRATEGY_NAME,
+    )
+    return out.sort_values("date").reset_index(drop=True)
 
 
-def select_renko_chart(df: pd.DataFrame, n1: int = 4, n2: int = 6, **kwargs) -> pd.DataFrame:
-    out = _prepare_indicators(df, n1=n1, n2=n2, **kwargs)
-    out = add_strategy_conditions(out)
-    out = add_final_selection(out)
+def select(df: pd.DataFrame, n1: int = 4, n2: int = 6, **kwargs) -> pd.DataFrame:
+    """Select stocks using the original TongDaXin renko XG condition."""
+    out = _prepare_indicators(df, n1=n1, n2=n2, **kwargs).copy()
+
+    selected_bool = out["tdx_renko_xg"].fillna(False).astype(bool)
+
+    out["selected"] = selected_bool.astype(int)
+    out["selected_score_base"] = out["selected"]
+
+    # v0 is a pure baseline signal. Scores are intentionally simple.
+    out["score"] = selected_bool.astype(float)
+    out["score_pct"] = selected_bool.astype(float) * 100.0
+
+    # Higher current red height / reversal strength ranks first within same date.
+    out["score_rank_key"] = (
+        pd.to_numeric(out["current_red_height"], errors="coerce").fillna(0.0)
+        + pd.to_numeric(out["brick_delta"], errors="coerce").fillna(0.0) * 0.01
+    )
+
     out["selection_strategy"] = STRATEGY_NAME
-    return out
+
+    existing_export_cols = [c for c in EXPORT_COLUMNS if c in out.columns]
+    other_cols = [c for c in out.columns if c not in existing_export_cols]
+    return out[existing_export_cols + other_cols]
 
 
-SELECT_FUNC = select_renko_chart
+def apply_strategy(df: pd.DataFrame, n1: int = 4, n2: int = 6, **kwargs) -> pd.DataFrame:
+    return select(df=df, n1=n1, n2=n2, **kwargs)
+
+
+def run(df: pd.DataFrame, n1: int = 4, n2: int = 6, **kwargs) -> pd.DataFrame:
+    return select(df=df, n1=n1, n2=n2, **kwargs)

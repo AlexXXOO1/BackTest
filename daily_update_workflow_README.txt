@@ -1,3 +1,27 @@
+# 路径统一说明
+
+当前版本已统一路径来源：所有主流程脚本默认读取 `config.py` 中的 `BacktestConfig`。
+
+默认数据根目录：`C:\Users\zyf37\Desktop\BackTest Data`
+
+如需换机器或换目录，不要逐个改脚本，优先设置环境变量：
+
+```powershell
+$env:BACKTEST_DATA_ROOT = "D:\BackTest Data"
+```
+
+标准派生路径：
+
+```text
+RAW_TDX_TXT_DIR       = DATA_ROOT / "data"
+MARKET_CACHE_DIR     = DATA_ROOT / "market_cache" / "daily_bars_by_symbol"
+INDICATOR_CACHE_PATH = DATA_ROOT / "indicator_cache" / "daily_indicators.parquet"
+POOLS_DIR            = DATA_ROOT / "pools"
+OUTPUT_DIR           = DATA_ROOT / "output"
+```
+
+---
+
 每日大盘数据更新流程 README
 
 #1. 适用场景
@@ -16,23 +40,23 @@
 
 当前统一使用的数据根目录：
 
-C:\Users\zyf37\Desktop\BackTest Data
+<config.DATA_ROOT>
 
 ##2.1 原始 TXT 数据目录
 
-C:\Users\zyf37\Desktop\BackTest Data\data
+<config.RAW_TDX_TXT_DIR>
 
 ##2.2 行情缓存目录 market cache
 
-C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol
+<config.MARKET_CACHE_DIR>
 
 ##2.3 指标缓存文件 indicator cache
 
-C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet
+<config.INDICATOR_CACHE_PATH>
 
 ##2.4 选股池输出目录 pools
 
-C:\Users\zyf37\Desktop\BackTest Data\pools
+<config.POOLS_DIR>
 
 ---
 
@@ -44,31 +68,31 @@ C:\Users\zyf37\Desktop\BackTest Data\pools
 
 #第一步：导入 TXT 数据到 market cache
 
-python scripts/import_tdx_txt.py --txt-dir "C:\Users\zyf37\Desktop\BackTest Data\data" --market-cache-dir "C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol"
+python scripts/import_tdx_txt.py
 
 ##作用
 
 这一步会读取：
 
-C:\Users\zyf37\Desktop\BackTest Data\data
+<config.RAW_TDX_TXT_DIR>
 
 目录下的通达信 TXT 文件，并生成 / 更新每只股票对应的 parquet 行情缓存。
 
 输出目录为：
 
-C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol
+<config.MARKET_CACHE_DIR>
 
 ---
 
 #第二步：重新生成 indicator cache
 
-python scripts/build_indicators.py --txt-dir "C:\Users\zyf37\Desktop\BackTest Data\data" --market-cache-dir "C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol" --indicator-cache-path "C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet"
+python scripts/build_indicators.py
 
 ##作用
 
 这一步会基于最新的 market cache 重新计算所有指标，并写入：
 
-C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet
+<config.INDICATOR_CACHE_PATH>
 
 常见指标包括：
 
@@ -87,13 +111,13 @@ C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet
 
 如果只想生成某一天的选股池，例如 `2026-04-29`，运行：
 
-python .\scripts\selector.py --start-date 2026-04-29 --end-date 2026-04-29 --strategy renko_chart_select_strategy_v0 --market-cache-dir "C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol" --indicator-cache-path "C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet" --pools-dir "C:\Users\zyf37\Desktop\BackTest Data\pools" --overwrite --debug-summary
+python .\scripts\selector.py --start-date 2026-05-06 --end-date 2026-05-06 --strategy renko_chart_select_strategy_v1 --overwrite --debug-summary
 
 ##3.2 补跑多个日期的选股池
 
 如果想补跑一个区间，例如 `2026-04-28` 到 `2026-04-29`，运行：
 
-python .\scripts\selector.py --start-date 2026-04-28 --end-date 2026-04-30 --strategy renko_chart_select_strategy_v1 --market-cache-dir "C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol" --indicator-cache-path "C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet" --pools-dir "C:\Users\zyf37\Desktop\BackTest Data\pools" --overwrite --debug-summary
+python .\scripts\selector.py --start-date 2026-04-28 --end-date 2026-04-30 --strategy renko_chart_select_strategy_v1 --overwrite --debug-summary
 
 ##3.3 更换策略名称
 
@@ -115,11 +139,11 @@ python .\scripts\selector.py --start-date 2026-04-28 --end-date 2026-04-30 --str
 
 假设今天更新的是 `2026-04-29` 的数据，每天完整运行下面三条：
 
-python scripts/import_tdx_txt.py --txt-dir "C:\Users\zyf37\Desktop\BackTest Data\data" --market-cache-dir "C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol"
+python scripts/import_tdx_txt.py
 
-python scripts/build_indicators.py --txt-dir "C:\Users\zyf37\Desktop\BackTest Data\data" --market-cache-dir "C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol" --indicator-cache-path "C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet"
+python scripts/build_indicators.py
 
-python .\scripts\selector.py --start-date 2026-04-29 --end-date 2026-04-29 --strategy renko_chart_select_strategy_v0 --market-cache-dir "C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol" --indicator-cache-path "C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet" --pools-dir "C:\Users\zyf37\Desktop\BackTest Data\pools" --overwrite --debug-summary
+python .\scripts\selector.py --start-date 2026-04-29 --end-date 2026-04-29 --strategy renko_chart_select_strategy_v0 --overwrite --debug-summary
 
 ---
 
@@ -129,15 +153,15 @@ python .\scripts\selector.py --start-date 2026-04-29 --end-date 2026-04-29 --str
         ↓
 scripts/import_tdx_txt.py
         ↓
-C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol
+<config.MARKET_CACHE_DIR>
         ↓
 scripts/build_indicators.py
         ↓
-C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet
+<config.INDICATOR_CACHE_PATH>
         ↓
 scripts/selector.py
         ↓
-C:\Users\zyf37\Desktop\BackTest Data\pools
+<config.POOLS_DIR>
 
 ---
 
@@ -159,7 +183,7 @@ data\market_cache\daily_bars_by_symbol
 
 正确示例：
 
-C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol
+<config.MARKET_CACHE_DIR>
 
 ---
 
@@ -169,7 +193,7 @@ C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol
 
 因为 selector 读取的是：
 
-C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet
+<config.INDICATOR_CACHE_PATH>
 
 如果只更新 TXT 和 market cache，但没有重新生成 indicator cache，selector 读到的指标可能还是旧数据。
 
@@ -179,7 +203,7 @@ C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet
 
 先检查：
 
-1. 当天 TXT 数据是否已经放入 `C:\Users\zyf37\Desktop\BackTest Data\data`
+1. 当天 TXT 数据是否已经放入 `<config.RAW_TDX_TXT_DIR>`
 2. 是否运行了 `import_tdx_txt.py`
 3. 是否运行了 `build_indicators.py`
 4. selector 的 `--start-date` 和 `--end-date` 是否写对
@@ -199,4 +223,4 @@ C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet
 
 核心原则：
 
-全部路径统一使用 C:\Users\zyf37\Desktop\BackTest Data 下的绝对路径
+全部路径统一使用 <config.DATA_ROOT> 下的绝对路径

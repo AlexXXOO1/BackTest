@@ -32,6 +32,12 @@ import argparse
 import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from config import OUTPUT_DIR
+
 import joblib
 import numpy as np
 import pandas as pd
@@ -44,13 +50,9 @@ except Exception:
     tqdm = None
 
 
-DEFAULT_DETAIL_PATH = Path(
-    r"C:\Users\zyf37\Desktop\BackTest Data\output\b2_v0_v1_v2_yearly_compare\b2_v0_v1_v2_trade_detail.csv"
-)
+DEFAULT_DETAIL_PATH = OUTPUT_DIR / "b2_v0_v1_v2_yearly_compare" / "b2_v0_v1_v2_trade_detail.csv"
 
-DEFAULT_OUTPUT_DIR = Path(
-    r"C:\Users\zyf37\Desktop\BackTest Data\output\xgb_b2_t2_return_alias_fixed"
-)
+DEFAULT_OUTPUT_DIR = OUTPUT_DIR / "xgb_b2_t2_return_alias_fixed"
 
 TARGET_COL = "ret_t1_open_to_t2_close_pct"
 

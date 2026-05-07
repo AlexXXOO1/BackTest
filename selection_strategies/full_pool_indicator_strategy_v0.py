@@ -410,4 +410,17 @@ def select_strategy(
     return out
 
 
-SELECT_FUNC = select_strategy
+def select(df: pd.DataFrame, n1: int = 4, n2: int = 6, **kwargs) -> pd.DataFrame:
+    """Standard selection strategy entry point."""
+    return select_strategy(df=df, **kwargs)
+
+
+def apply_strategy(df: pd.DataFrame, n1: int = 4, n2: int = 6, **kwargs) -> pd.DataFrame:
+    return select(df=df, n1=n1, n2=n2, **kwargs)
+
+
+def run(df: pd.DataFrame, n1: int = 4, n2: int = 6, **kwargs) -> pd.DataFrame:
+    return select(df=df, n1=n1, n2=n2, **kwargs)
+
+
+SELECT_FUNC = select

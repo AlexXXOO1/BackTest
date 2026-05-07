@@ -6,21 +6,19 @@ Auto-discover all Python files under selection_strategies/.
 A strategy module is registered automatically when it defines:
     STRATEGY_NAME = "your_strategy_name"
 
-The entry function is resolved in this order:
-    1. SELECT_FUNC
-    2. select_strategy
-    3. select
-    4. select_renko_chart
-    5. select_stocks
-    6. run_strategy
+The standard entry function is:
+    select(df, n1=4, n2=6, **kwargs) -> pd.DataFrame
+
+For backward compatibility, old aliases are still resolved, but new strategy
+files should always define select().
 
 Recommended new style:
     STRATEGY_NAME = "my_strategy"
 
-    def select_strategy(df):
+    def select(df, n1=4, n2=6, **kwargs):
         ...
 
-    SELECT_FUNC = select_strategy
+    SELECT_FUNC = select
 """
 
 from __future__ import annotations
@@ -31,12 +29,14 @@ from typing import Callable, Dict
 
 
 ENTRY_FUNC_CANDIDATES: tuple[str, ...] = (
+    "select",
     "SELECT_FUNC",
     "select_strategy",
-    "select",
     "select_renko_chart",
     "select_stocks",
     "run_strategy",
+    "apply_strategy",
+    "run",
 )
 
 

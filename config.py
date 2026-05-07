@@ -6,16 +6,35 @@ import os
 import pandas as pd
 
 ROOT_DIR = Path(__file__).resolve().parent
-DATA_ROOT = Path(r"C:\Users\zyf37\Desktop\BackTest Data")
+
+# All runtime data should live outside the git project.
+# Override this on another machine with:
+#   $env:BACKTEST_DATA_ROOT = "D:\\BackTest Data"
+DATA_ROOT = Path(
+    os.environ.get(
+        "BACKTEST_DATA_ROOT",
+        r"C:\Users\zyf37\Desktop\BackTest Data",
+    )
+)
+
+# Standard runtime paths. Keep every script using these defaults.
+RAW_TDX_TXT_DIR = DATA_ROOT / "data"
+MARKET_CACHE_DIR = DATA_ROOT / "market_cache" / "daily_bars_by_symbol"
+INDICATOR_CACHE_PATH = DATA_ROOT / "indicator_cache" / "daily_indicators.parquet"
+POOLS_DIR = DATA_ROOT / "pools"
+OUTPUT_DIR = DATA_ROOT / "output"
+
+# Compatibility aliases for older imports / docs.
+TXT_DIR = RAW_TDX_TXT_DIR
 
 
 @dataclass(frozen=True)
 class BacktestConfig:
-    txt_dir: Path = DATA_ROOT / "data"
-    market_cache_dir: Path = DATA_ROOT / "data" / "market_cache" / "daily_bars_by_symbol"
-    indicator_cache_path: Path = DATA_ROOT / "data" / "indicator_cache" / "daily_indicators.parquet"
-    output_dir: Path = DATA_ROOT / "output"
-    pools_dir: Path = DATA_ROOT / "pools"
+    txt_dir: Path = RAW_TDX_TXT_DIR
+    market_cache_dir: Path = MARKET_CACHE_DIR
+    indicator_cache_path: Path = INDICATOR_CACHE_PATH
+    output_dir: Path = OUTPUT_DIR
+    pools_dir: Path = POOLS_DIR
     start_date: pd.Timestamp = pd.Timestamp("2025-01-01")
     end_date: pd.Timestamp = pd.Timestamp("2025-12-31")
     initial_capital: float = 20000.0

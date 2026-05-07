@@ -7,12 +7,13 @@ from core.progress import progress_bar
 from core.data_store import MarketDataStore
 from indicators import add_all_indicators
 from core.storage import read_table, write_table
+from config import INDICATOR_CACHE_PATH
 
 
 class IndicatorStore:
     """Build and read the reusable daily indicator cache."""
 
-    def __init__(self, indicator_cache_path: str | Path = "data/indicator_cache/daily_indicators.parquet") -> None:
+    def __init__(self, indicator_cache_path: str | Path = INDICATOR_CACHE_PATH) -> None:
         self.indicator_cache_path = Path(indicator_cache_path)
 
     def exists(self) -> bool:

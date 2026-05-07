@@ -7,6 +7,7 @@ import pandas as pd
 from core.progress import progress_bar
 from core.storage import read_table, write_table
 from utils import is_main_board_txt, is_st_txt, read_tdx_export_txt
+from config import RAW_TDX_TXT_DIR, MARKET_CACHE_DIR
 
 BAR_COLUMNS = ["symbol", "file", "date", "open", "high", "low", "close", "volume", "amount"]
 
@@ -23,7 +24,7 @@ class MarketDataStore:
     incremental updates simple.
     """
 
-    def __init__(self, txt_dir: str | Path = "data", market_cache_dir: str | Path = "data/market_cache/daily_bars_by_symbol") -> None:
+    def __init__(self, txt_dir: str | Path = RAW_TDX_TXT_DIR, market_cache_dir: str | Path = MARKET_CACHE_DIR) -> None:
         self.txt_dir = Path(txt_dir)
         self.market_cache_dir = Path(market_cache_dir)
         self.market_cache_dir.mkdir(parents=True, exist_ok=True)

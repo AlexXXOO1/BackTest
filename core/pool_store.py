@@ -6,9 +6,10 @@ import pandas as pd
 from core.progress import progress_bar
 from selection_strategies import get_selection_strategy
 from core.storage import read_table, write_table
+from config import POOLS_DIR
 
 POOL_EXPORT_COLUMNS = [
-    "symbol", "file", "date", "close", "selection_strategy", "raw_score", "score_pct", "K", "D", "J", "yellow_ma",
+    "symbol", "file", "date", "close", "selection_strategy", "raw_score", "score_pct", "K", "D", "J", "yellow_ma", "z_fast_trend_line", "z_slow_trend_line",
     "hard_brick_turn_strong", "two_day_above_trend_line", "short_trend_above_trend_line",
     "close_below_short_trend_cap", "price_below_50", "j_momentum_or_low",
     "close_above_yellow_ma", "surge_then_shrink_pullback", "small_rise_long_red_brick",
@@ -25,7 +26,7 @@ POOL_EXPORT_COLUMNS = [
 class PoolStore:
     """Single-file pool storage for all dates of one selection strategy."""
 
-    def __init__(self, pools_dir: str | Path = "pools") -> None:
+    def __init__(self, pools_dir: str | Path = POOLS_DIR) -> None:
         self.pools_dir = Path(pools_dir)
         self.pools_dir.mkdir(parents=True, exist_ok=True)
 

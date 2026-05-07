@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config import BacktestConfig
+from config import BacktestConfig, RAW_TDX_TXT_DIR, OUTPUT_DIR
 from core.pool_store import PoolStore
 
 
@@ -24,7 +24,8 @@ from core.pool_store import PoolStore
 
 PRINT_COLUMNS = [
     #"股票代码",
-    "股票名",
+    #"股票名",
+    "close",
     #"score",
     #"score_pct",
     #"score_rank_key",
@@ -43,8 +44,8 @@ SHOW_INDEX = False
 # Default paths
 # ============================================================
 
-DEFAULT_DATA_DIR = Path(r"C:\Users\zyf37\Desktop\BackTest Data\data")
-DEFAULT_OUTPUT_DIR = Path(r"C:\Users\zyf37\Desktop\Daily_selection")
+DEFAULT_DATA_DIR = RAW_TDX_TXT_DIR
+DEFAULT_OUTPUT_DIR = OUTPUT_DIR / "Daily_selection"
 
 
 # ============================================================

@@ -18,6 +18,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+from config import BacktestConfig
+
 # =============================================================================
 # Strategy registry compatibility
 # =============================================================================
@@ -141,7 +143,17 @@ def find_first_existing_col(df: pd.DataFrame, candidates: list[str]) -> Optional
 
 
 def ensure_date_col(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
+    """
+    Normalize date column without globally sorting the whole dataframe.
+
+    Important:
+    The indicator cache can contain millions of rows and many float columns.
+    Calling sort_values("date") on the full cache creates a huge full-column copy
+    and can easily trigger numpy ArrayMemoryError.
+
+    Sorting is done later per symbol, where each group is small enough.
+    """
+    out = df.copy(deep=False)
 
     date_col = find_first_existing_col(out, ["date", "trade_date", "signal_date"])
 
@@ -153,13 +165,12 @@ def ensure_date_col(df: pd.DataFrame) -> pd.DataFrame:
 
     out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
     out = out.dropna(subset=["date"])
-    out = out.sort_values("date").reset_index(drop=True)
 
     return out
 
 
 def ensure_code_col(df: pd.DataFrame, fallback_code: str = "") -> pd.DataFrame:
-    out = df.copy()
+    out = df.copy(deep=False)
 
     code_col = find_first_existing_col(
         out,
@@ -245,24 +256,27 @@ def build_pool_from_indicator_cache(
 
     ind = read_indicator_cache(indicator_cache_path)
 
+    # Filter date range before per-symbol processing to reduce memory pressure.
+    # Indicators have already been calculated in daily_indicators.parquet, so selector
+    # does not need rows outside the requested signal date range.
+    ind = ind[(ind["date"] >= start_date) & (ind["date"] <= end_date)].copy()
+
     if debug_summary:
-        print(f"[DEBUG] indicator cache rows: {len(ind):,}")
+        print(f"[DEBUG] indicator cache rows in range: {len(ind):,}")
         print(f"[DEBUG] indicator cache columns: {len(ind.columns):,}")
-        print(f"[DEBUG] indicator cache symbols: {ind['code'].nunique():,}")
+        print(f"[DEBUG] indicator cache symbols in range: {ind['code'].nunique():,}")
 
     selected_parts: list[pd.DataFrame] = []
 
-    symbols = sorted(ind["code"].dropna().unique())
+    grouped = ind.groupby("code", sort=True, dropna=True)
 
     try:
         from tqdm import tqdm
-        iterator = tqdm(symbols, desc="Build pool from indicator cache", unit="symbol")
+        iterator = tqdm(grouped, total=ind["code"].nunique(), desc="Build pool from indicator cache", unit="symbol")
     except Exception:
-        iterator = symbols
+        iterator = grouped
 
-    for code in iterator:
-        g = ind[ind["code"] == code].copy()
-
+    for code, g in iterator:
         if g.empty:
             continue
 
@@ -286,8 +300,8 @@ def build_pool_from_indicator_cache(
         if "selected" not in out.columns:
             continue
 
-        out_range = filter_date_range(out, start_date, end_date)
-        selected = out_range[safe_bool_selected(out_range["selected"])].copy()
+        # Date range has already been filtered before strategy execution.
+        selected = out[safe_bool_selected(out["selected"])].copy()
 
         if selected.empty:
             continue
@@ -576,6 +590,7 @@ def print_debug_summary(
 # =============================================================================
 
 def parse_args() -> argparse.Namespace:
+    default = BacktestConfig()
     parser = argparse.ArgumentParser(description="Build selected pool for a selection strategy.")
 
     parser.add_argument("--start-date", default=None, help="Example: 2024-01-01")
@@ -586,19 +601,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--market-cache-dir",
         type=Path,
-        default=Path(r"C:\Users\zyf37\Desktop\BackTest Data\market_cache\daily_bars_by_symbol"),
+        default=default.market_cache_dir,
     )
 
     parser.add_argument(
         "--indicator-cache-path",
         type=Path,
-        default=Path(r"C:\Users\zyf37\Desktop\BackTest Data\indicator_cache\daily_indicators.parquet"),
+        default=default.indicator_cache_path,
     )
 
     parser.add_argument(
         "--pools-dir",
         type=Path,
-        default=Path(r"C:\Users\zyf37\Desktop\BackTest Data\pools"),
+        default=default.pools_dir,
     )
 
     parser.add_argument("--n1", type=int, default=4)
