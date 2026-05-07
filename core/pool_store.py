@@ -6,7 +6,8 @@ import pandas as pd
 from core.progress import progress_bar
 from selection_strategies import get_selection_strategy
 from core.storage import read_table, write_table
-from config import POOLS_DIR
+from core.cache_meta import build_pool_meta, write_json_meta
+from config import POOLS_DIR, MARKET_CACHE_DIR, INDICATOR_CACHE_PATH
 
 POOL_EXPORT_COLUMNS = [
     "symbol", "file", "date", "close", "selection_strategy", "raw_score", "score_pct", "K", "D", "J", "yellow_ma", "z_fast_trend_line", "z_slow_trend_line",
@@ -62,6 +63,26 @@ class PoolStore:
             ascending = [True, False, True][: len(sort_cols)]
             out = out.sort_values(sort_cols, ascending=ascending).reset_index(drop=True) if sort_cols else out.reset_index(drop=True)
         write_table(out, path)
+
+        try:
+            strategy_func = get_selection_strategy(selection_strategy)
+            meta = build_pool_meta(
+                pool=out,
+                strategy_name=selection_strategy,
+                strategy_func=strategy_func,
+                start_date=start_date,
+                end_date=end_date,
+                n1=4,
+                n2=6,
+                market_cache_dir=MARKET_CACHE_DIR,
+                indicator_cache_path=INDICATOR_CACHE_PATH,
+                pools_dir=self.pools_dir,
+            )
+            meta_path = write_json_meta(meta, path)
+            print(f"[INFO] Pool meta saved: {meta_path}")
+        except Exception as exc:
+            print(f"[WARN] Failed to write pool meta: {exc}")
+
         return path
 
 

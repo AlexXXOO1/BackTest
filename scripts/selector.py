@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 from config import BacktestConfig
+from core.cache_meta import build_pool_meta, write_json_meta
 
 # =============================================================================
 # Strategy registry compatibility
@@ -500,6 +501,15 @@ def save_pool(
     pool: pd.DataFrame,
     pool_path: Path,
     overwrite: bool,
+    strategy_name: str | None = None,
+    strategy_func: Callable | None = None,
+    start_date: pd.Timestamp | None = None,
+    end_date: pd.Timestamp | None = None,
+    n1: int = 4,
+    n2: int = 6,
+    market_cache_dir: Path | None = None,
+    indicator_cache_path: Path | None = None,
+    pools_dir: Path | None = None,
 ) -> None:
     pool_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -514,12 +524,30 @@ def save_pool(
             combined = combined.drop_duplicates(dedup_cols, keep="last")
 
         combined.to_parquet(pool_path, index=False)
+        saved_pool = combined
         print(f"[INFO] Appended pool saved: {pool_path}")
         print(f"[INFO] Rows: old={len(old):,}, new={len(pool):,}, combined={len(combined):,}")
     else:
         pool.to_parquet(pool_path, index=False)
+        saved_pool = pool
         print(f"[INFO] Pool saved: {pool_path}")
         print(f"[INFO] Rows: {len(pool):,}")
+
+    if strategy_name is not None and strategy_func is not None and start_date is not None and end_date is not None:
+        meta = build_pool_meta(
+            pool=saved_pool,
+            strategy_name=strategy_name,
+            strategy_func=strategy_func,
+            start_date=start_date,
+            end_date=end_date,
+            n1=n1,
+            n2=n2,
+            market_cache_dir=market_cache_dir or Path(""),
+            indicator_cache_path=indicator_cache_path or Path(""),
+            pools_dir=pools_dir or pool_path.parent,
+        )
+        meta_path = write_json_meta(meta, pool_path)
+        print(f"[INFO] Pool meta saved: {meta_path}")
 
 
 # =============================================================================
@@ -652,6 +680,8 @@ def main() -> None:
     if end_date < start_date:
         raise ValueError(f"end_date < start_date: {end_date} < {start_date}")
 
+    strategy_func = get_strategy_func(args.strategy)
+
     if args.debug_summary:
         print_debug_summary(
             strategy_name=args.strategy,
@@ -685,6 +715,15 @@ def main() -> None:
         pool=pool,
         pool_path=pool_path,
         overwrite=args.overwrite,
+        strategy_name=args.strategy,
+        strategy_func=strategy_func,
+        start_date=start_date,
+        end_date=end_date,
+        n1=args.n1,
+        n2=args.n2,
+        market_cache_dir=args.market_cache_dir,
+        indicator_cache_path=args.indicator_cache_path,
+        pools_dir=args.pools_dir,
     )
 
     if args.debug_summary:

@@ -7,6 +7,7 @@ from core.progress import progress_bar
 from core.data_store import MarketDataStore
 from indicators import add_all_indicators
 from core.storage import read_table, write_table
+from core.cache_meta import build_indicator_meta, write_json_meta
 from config import INDICATOR_CACHE_PATH
 
 
@@ -69,4 +70,19 @@ class IndicatorStore:
             if key_cols:
                 out = out.sort_values(key_cols).drop_duplicates(key_cols, keep="last").reset_index(drop=True)
         write_table(out, self.indicator_cache_path)
+
+        meta = build_indicator_meta(
+            df=out,
+            n1=n1,
+            n2=n2,
+            start_date=start_date,
+            end_date=end_date,
+            incremental=incremental,
+            lookback_days=lookback_days,
+            market_cache_dir=market_store.market_cache_dir,
+            indicator_cache_path=self.indicator_cache_path,
+        )
+        meta_path = write_json_meta(meta, self.indicator_cache_path)
+        print(f"[INFO] Indicator meta saved: {meta_path}")
+
         return out
