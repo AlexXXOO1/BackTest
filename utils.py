@@ -152,10 +152,11 @@ MAIN_BOARD_PREFIXES = (
     "SZ#000",
     "SZ#001",
     "SZ#002",
+    "SZ#003",
 )
 
 EXCLUDED_PREFIXES = (
-    
+
 )
 
 

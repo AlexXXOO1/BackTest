@@ -33,36 +33,36 @@ import pandas as pd
 STRATEGY_NAME = "renko_trade_strategy_v4_score_no_st_t3_close"
 
 
-# =============================================================================
-# Parameters
-# =============================================================================
 
-# Score filter
+
+
+
+
 MIN_SCORE_PCT = 40.0
 
-# If no score_pct >= 60, whether to fallback to score_pct >= 40.
+
 ALLOW_SCORE_FALLBACK = False
 FALLBACK_MIN_SCORE_PCT = 40.0
 
-# Optional T+1 open gap filter
+
 USE_T1_OPEN_GAP_FILTER = False
 MIN_T1_OPEN_GAP_PCT = -2.0
 MAX_T1_OPEN_GAP_PCT = 2.0
 
-# Stop loss rule
+
 USE_STOP_LOSS = True
 STOP_LOSS_RATIO = 0.98
 
-# Trading cost / capital defaults
+
 DEFAULT_CASH = 20000.0
 DEFAULT_LOT_SIZE = 100
 DEFAULT_COMMISSION_RATE = 0.0003
 DEFAULT_STAMP_TAX_RATE = 0.001
 
 
-# =============================================================================
-# Result object
-# =============================================================================
+
+
+
 
 @dataclass
 class TradeResult:
@@ -85,9 +85,9 @@ class TradeResult:
     strategy: str
 
 
-# =============================================================================
-# Basic helpers
-# =============================================================================
+
+
+
 
 def safe_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -176,7 +176,7 @@ def should_skip_by_score(row: pd.Series) -> bool:
     Return True if score filter rejects this candidate.
     """
     if "score_pct" not in row.index:
-        # If pool has no score_pct, do not block by score.
+
         return False
 
     score_pct = safe_float(row.get("score_pct"), default=-999.0)
@@ -190,9 +190,9 @@ def should_skip_by_score(row: pd.Series) -> bool:
     return True
 
 
-# =============================================================================
-# Market data helpers
-# =============================================================================
+
+
+
 
 def sort_market_df(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
@@ -319,9 +319,9 @@ def apply_costs(
     return gross_pnl, net_pnl, ret_pct
 
 
-# =============================================================================
-# Optional candidate selector
-# =============================================================================
+
+
+
 
 def choose_candidate(candidates: pd.DataFrame) -> pd.Series | None:
     """
@@ -343,7 +343,7 @@ def choose_candidate(candidates: pd.DataFrame) -> pd.Series | None:
     if df.empty:
         return None
 
-    # Filter ST by stock name if stock-name column exists.
+
     if any(col in df.columns for col in ["股票名", "stock_name", "name", "security_name", "stockName"]):
         names = df.apply(get_stock_name_from_data, axis=1)
         df = df[~names.map(is_st_stock_name)].copy()
@@ -351,7 +351,7 @@ def choose_candidate(candidates: pd.DataFrame) -> pd.Series | None:
     if df.empty:
         return None
 
-    # Score filter
+
     if "score_pct" in df.columns:
         score_pct = pd.to_numeric(df["score_pct"], errors="coerce")
         df_high = df[score_pct >= MIN_SCORE_PCT].copy()
@@ -363,7 +363,7 @@ def choose_candidate(candidates: pd.DataFrame) -> pd.Series | None:
         else:
             return None
 
-    # Ensure ranking columns
+
     for col in [
         "score_pct",
         "score_rank_key",
@@ -405,9 +405,9 @@ def choose_candidate(candidates: pd.DataFrame) -> pd.Series | None:
     return df.iloc[0]
 
 
-# =============================================================================
-# Execute function compatible with engine.py
-# =============================================================================
+
+
+
 
 def execute_trade(
     *,
@@ -444,16 +444,16 @@ def execute_trade(
     code_value = str(row.get("code", code)).strip()
     stock_name = get_stock_name_from_data(row)
 
-    # -------------------------------------------------------------------------
-    # ST filter
-    # -------------------------------------------------------------------------
+
+
+
     if is_st_stock_name(stock_name):
         print(f"{STRATEGY_NAME}: skip ST stock: {code_value} {stock_name}")
         return None
 
-    # -------------------------------------------------------------------------
-    # Score filter
-    # -------------------------------------------------------------------------
+
+
+
     if should_skip_by_score(row):
         score_pct = safe_float(row.get("score_pct"), default=-999.0)
         print(
@@ -473,7 +473,7 @@ def execute_trade(
     if t0_bar is None or t1_bar is None or t2_bar is None or t3_bar is None:
         return None
 
-    # Required price columns
+
     required_t0_cols = ["close"]
     required_t1_cols = ["open", "close"]
     required_t2_cols = ["open", "close"]
@@ -509,9 +509,9 @@ def execute_trade(
     buy_price = t1_open
     buy_date = pd.Timestamp(t1_bar["date"]).normalize()
 
-    # -------------------------------------------------------------------------
-    # Optional T+1 open gap filter
-    # -------------------------------------------------------------------------
+
+
+
     if USE_T1_OPEN_GAP_FILTER:
         t1_open_gap_pct = (buy_price / t0_close - 1.0) * 100.0
 
@@ -522,9 +522,9 @@ def execute_trade(
             )
             return None
 
-    # -------------------------------------------------------------------------
-    # Stop loss / exit rule
-    # -------------------------------------------------------------------------
+
+
+
     stop_price = buy_price  * STOP_LOSS_RATIO
 
     if USE_STOP_LOSS and t1_close > 0 and t1_close < stop_price:
@@ -551,9 +551,9 @@ def execute_trade(
         sell_date = pd.Timestamp(t3_bar["date"]).normalize()
         exit_rule = "t3_close"
 
-    # -------------------------------------------------------------------------
-    # Position sizing
-    # -------------------------------------------------------------------------
+
+
+
     resolved_cash = resolve_cash(
         cash=cash,
         config=config,
@@ -639,14 +639,14 @@ def trade_record_to_dict(record: TradeResult | dict[str, Any] | None) -> dict[st
     }
 
 
-# =============================================================================
-# Registry aliases
-# =============================================================================
 
-# Your trade_strategies/registry.py requires this name.
+
+
+
+
 EXECUTE_FUNC = execute_trade
 
-# Compatibility aliases.
+
 TRADE_FUNC = execute_trade
 
 SELECT_CANDIDATE_FUNC = choose_candidate

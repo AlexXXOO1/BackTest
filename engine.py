@@ -21,9 +21,9 @@ from trade_strategies import (
 )
 
 
-# =========================
-# Terminal print helpers
-# =========================
+
+
+
 
 def color_text(text: str, color_code: str) -> str:
     return f"\033[{color_code}m{text}\033[0m"
@@ -198,9 +198,9 @@ def print_final_summary(summary: dict, result_json: Path, config) -> None:
     print_key_value("Result JSON", result_json)
 
 
-# =========================
-# Pool / indicator functions
-# =========================
+
+
+
 
 def build_or_update_indicator_cache(config, incremental: bool = False) -> pd.DataFrame:
     market_store = MarketDataStore(config.txt_dir, config.market_cache_dir)
@@ -298,9 +298,9 @@ def select_candidates(
     )
 
 
-# =========================
-# Trade execution helpers
-# =========================
+
+
+
 
 def inject_pool_fields_into_df(
     df: pd.DataFrame,
@@ -387,9 +387,9 @@ def execute_trade_from_store(
     )
 
 
-# =========================
-# Report builders
-# =========================
+
+
+
 
 def build_daily_detail(
     signal_date,
@@ -465,9 +465,9 @@ def build_summary(
     }
 
 
-# =========================
-# Selector runner
-# =========================
+
+
+
 
 def run_selector(config, overwrite: bool = False) -> None:
     if config.selection_strategy not in SELECTION_STRATEGY_REGISTRY:
@@ -503,9 +503,9 @@ def run_selector(config, overwrite: bool = False) -> None:
     print_key_value("Total rows in pool file", len(full_pool))
 
 
-# =========================
-# Backtest runner
-# =========================
+
+
+
 
 def run_backtest(config) -> Path | None:
     if config.selection_strategy not in SELECTION_STRATEGY_REGISTRY:
