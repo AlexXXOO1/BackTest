@@ -8,27 +8,13 @@ Purpose:
 - Read indicator cache.
 - Dynamically load any selection strategy from selection_strategies/.
 - Run strategy per symbol.
+- Add T+1 to T+3 forward return labels AFTER strategy selection.
 - Keep selected rows.
 - Save pool parquet/csv.
 
-Strategy file requirement:
-    selection_strategies/xxx.py
-
-Must provide either:
-    def select(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
-        ...
-or:
-    SELECT_FUNC = select
-
-Strategy output should contain:
-    selected
-
-Recommended strategy output:
-    selected
-    selected_score_base
-    score_rank_key
-    score_pct
-    selection_strategy
+Important:
+- Forward return columns are labels for analysis only.
+- They are added after select_func(g), so the strategy cannot use future information.
 """
 
 import argparse
@@ -38,6 +24,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -48,22 +35,14 @@ DEFAULT_INDICATOR_PATH = DEFAULT_DATA_ROOT / "indicator_cache" / "daily_indicato
 DEFAULT_POOL_DIR = DEFAULT_DATA_ROOT / "pools"
 
 
+FORWARD_LABEL_PREFIXES = (
+    "fwd_close_T",
+    "fwd_return_pct_T",
+    "fwd_up_T",
+)
+
+
 def parse_extra_args(items: Optional[List[str]]) -> Dict[str, Any]:
-    """
-    Parse strategy kwargs from command line.
-
-    Supported forms:
-        --param key=value
-        --param key:int=10
-        --param key:float=0.75
-        --param key:bool=true
-        --param key:str=abc
-
-    Examples:
-        --param min_red_green_ratio:float=0.75
-        --param target_count:int=15
-        --param require_below_ma20:bool=true
-    """
     if not items:
         return {}
 
@@ -118,7 +97,6 @@ def load_strategy_func(strategy_name: str):
 
     module = importlib.util.module_from_spec(spec)
 
-    # Make project root importable.
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -231,6 +209,96 @@ def ensure_output_columns(df: pd.DataFrame, strategy_name: str) -> pd.DataFrame:
     return out
 
 
+def drop_existing_forward_label_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    防御性处理：
+    如果 indicator cache 里意外已有 fwd_* 未来标签列，
+    在传给策略前强制删除，避免策略看到未来信息。
+    """
+    out = df.copy()
+
+    drop_cols = [
+        c for c in out.columns
+        if any(str(c).startswith(prefix) for prefix in FORWARD_LABEL_PREFIXES)
+    ]
+
+    if drop_cols:
+        out = out.drop(columns=drop_cols)
+
+    return out
+
+
+def make_forward_return_labels(
+    df: pd.DataFrame,
+    horizons: tuple[int, ...] = (1, 2, 3),
+    price_col: str = "close",
+) -> pd.DataFrame:
+    """
+    基于完整个股时间序列生成未来收益标签。
+
+    注意：
+    - 这个函数只能在策略执行之后调用。
+    - 生成的 fwd_return_pct_T1/T2/T3 只用于事后分析。
+    - T1 表示下一根交易日 close 相对当前 close 的收益率。
+    """
+
+    required = ["symbol", "date", price_col]
+    missing = [c for c in required if c not in df.columns]
+
+    if missing:
+        raise ValueError(f"Cannot make forward labels, missing columns: {missing}")
+
+    out = df[["symbol", "date", price_col]].copy()
+
+    out["symbol"] = out["symbol"].map(normalize_symbol)
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    out[price_col] = pd.to_numeric(out[price_col], errors="coerce")
+
+    out = (
+        out.dropna(subset=["symbol", "date"])
+        .sort_values(["symbol", "date"])
+        .reset_index(drop=True)
+    )
+
+    g = out.groupby("symbol", group_keys=False)
+
+    label_cols = ["symbol", "date"]
+
+    for h in horizons:
+        h = int(h)
+
+        fwd_close_col = f"fwd_close_T{h}"
+        fwd_return_col = f"fwd_return_pct_T{h}"
+        fwd_up_col = f"fwd_up_T{h}"
+
+        out[fwd_close_col] = g[price_col].shift(-h)
+
+        out[fwd_return_col] = (
+            out[fwd_close_col] / out[price_col] - 1.0
+        ) * 100.0
+
+        out[fwd_return_col] = (
+            out[fwd_return_col]
+            .replace([np.inf, -np.inf], np.nan)
+        )
+
+        out[fwd_up_col] = np.where(
+            out[fwd_return_col].notna(),
+            out[fwd_return_col] > 0,
+            np.nan,
+        )
+
+        label_cols.extend(
+            [
+                fwd_close_col,
+                fwd_return_col,
+                fwd_up_col,
+            ]
+        )
+
+    return out[label_cols]
+
+
 def build_pool(
     indicators: pd.DataFrame,
     strategy_name: str,
@@ -247,13 +315,19 @@ def build_pool(
     iterator = grouped
 
     if progress:
-        iterator = tqdm(grouped, total=indicators["symbol"].nunique(), desc="Build pool by symbol")
+        iterator = tqdm(
+            grouped,
+            total=indicators["symbol"].nunique(),
+            desc="Build pool by symbol",
+        )
 
     for symbol, g in iterator:
         g = g.sort_values("date").reset_index(drop=True)
 
         try:
-            selected_df = select_func(g, **strategy_kwargs)
+            strategy_input = drop_existing_forward_label_cols(g)
+
+            selected_df = select_func(strategy_input, **strategy_kwargs)
 
             if selected_df is None or not isinstance(selected_df, pd.DataFrame):
                 raise TypeError(
@@ -261,6 +335,22 @@ def build_pool(
                 )
 
             selected_df = ensure_output_columns(selected_df, strategy_name)
+
+            forward_labels = make_forward_return_labels(
+                strategy_input,
+                horizons=(1, 2, 3),
+                price_col="close",
+            )
+
+            selected_df["symbol"] = selected_df["symbol"].map(normalize_symbol)
+            selected_df["date"] = pd.to_datetime(selected_df["date"], errors="coerce")
+
+            selected_df = selected_df.merge(
+                forward_labels,
+                on=["symbol", "date"],
+                how="left",
+                validate="many_to_one",
+            )
 
             if keep_all_rows:
                 part = selected_df.copy()
@@ -282,7 +372,12 @@ def build_pool(
         return pd.DataFrame()
 
     pool = pd.concat(parts, ignore_index=True)
-    pool = pool.sort_values(["date", "score_rank_key", "symbol"], ascending=[True, False, True])
+
+    pool = pool.sort_values(
+        ["date", "score_rank_key", "symbol"],
+        ascending=[True, False, True],
+    )
+
     pool = pool.reset_index(drop=True)
 
     return pool
@@ -356,6 +451,29 @@ def print_pool_summary(pool: pd.DataFrame, strategy_name: str) -> None:
     if "score_rank_key" in pool.columns:
         print("\nscore_rank_key describe:")
         print(pool["score_rank_key"].describe().to_string())
+
+    fwd_return_cols = [
+        c for c in pool.columns
+        if str(c).startswith("fwd_return_pct_T")
+    ]
+
+    fwd_up_cols = [
+        c for c in pool.columns
+        if str(c).startswith("fwd_up_T")
+    ]
+
+    if fwd_return_cols:
+        print("\nforward return columns:")
+        print(fwd_return_cols)
+
+        print("\nforward return describe:")
+        print(pool[fwd_return_cols].describe().to_string())
+
+    if fwd_up_cols:
+        print("\nforward up ratio:")
+        for c in fwd_up_cols:
+            s = pd.to_numeric(pool[c], errors="coerce")
+            print(f"{c}: {s.mean():.4f}")
 
     print("\ncolumns:")
     print(list(pool.columns))
@@ -435,7 +553,11 @@ def main():
     print(f"[INFO] indicator symbols: {indicators['symbol'].nunique():,}")
     print(f"[INFO] indicator date range: {indicators['date'].min()} -> {indicators['date'].max()}")
 
-    indicators = apply_date_filter(indicators, args.start_date, args.end_date)
+    indicators = apply_date_filter(
+        indicators,
+        args.start_date,
+        args.end_date,
+    )
 
     if indicators.empty:
         raise RuntimeError("Indicator data is empty after date filtering.")
@@ -469,6 +591,24 @@ def main():
             "end_date": args.end_date,
             "strategy_kwargs": strategy_kwargs,
             "keep_all_rows": bool(args.keep_all_rows),
+            "forward_return": {
+                "enabled": True,
+                "safe_mode": "labels_added_after_strategy_selection",
+                "price_col": "close",
+                "horizons": [1, 2, 3],
+                "return_type": "close_to_close_pct",
+                "columns": [
+                    "fwd_close_T1",
+                    "fwd_return_pct_T1",
+                    "fwd_up_T1",
+                    "fwd_close_T2",
+                    "fwd_return_pct_T2",
+                    "fwd_up_T2",
+                    "fwd_close_T3",
+                    "fwd_return_pct_T3",
+                    "fwd_up_T3",
+                ],
+            },
         },
     )
 
