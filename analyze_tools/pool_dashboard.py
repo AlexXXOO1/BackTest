@@ -1626,6 +1626,469 @@ def render_signal_analysis(default_pool_path: Path | None) -> None:
     )
 
 
+
+def render_daily_signal_score_analysis(default_pool_path: Path | None) -> None:
+    page_header("Daily Signal Score", pool_path=default_pool_path)
+
+    if default_pool_path is None:
+        st.error("No pool file selected.")
+        return
+
+    pool_path = default_pool_path
+
+    factors = [
+        "volume_ratio_prev1",
+        "amplitude_pct",
+        "daily_return_pct",
+        "body_abs_pct",
+        "volume_ratio_ma10",
+        "volume_ratio_ma5",
+        "red_vs_prev_green_ratio",
+        "upper_shadow_pct",
+        "lower_shadow_pct",
+        "t0_close_to_z_short_trend_line_pct",
+        "t0_close_to_z_long_trend_line_pct",
+        "t1_open_gap_pct",
+        "renko_value",
+        "macd_dif",
+        "macd_dea",
+        "macd_hist",
+        "intraday_return_pct",
+        "body_pct",
+    ]
+
+    try:
+        pool_df = load_pool(str(pool_path), selected_only=True)
+        all_pool_df = load_pool(str(pool_path), selected_only=False)
+        target_options = list_forward_return_targets(all_pool_df)
+    except Exception as exc:
+        st.error(f"Unable to read pool: {exc}")
+        return
+
+    if pool_df.empty:
+        st.warning("Selected pool is empty.")
+        return
+
+    if "date" not in pool_df.columns:
+        st.error("Pool missing date column.")
+        return
+
+    if not target_options:
+        st.error("No fwd_return_pct_T* target column found in this pool.")
+        return
+
+    pool_df = normalize_date_col(pool_df)
+
+    available_dates = sorted(pool_df["date"].dropna().dt.date.unique(), reverse=True)
+    if not available_dates:
+        st.warning("No valid signal date found.")
+        return
+
+    default_target = "fwd_return_pct_T1" if "fwd_return_pct_T1" in target_options else target_options[0]
+
+    with st.sidebar:
+        st.divider()
+        st.header("Daily score config")
+
+        target_col = st.selectbox(
+            "Bucket target",
+            target_options,
+            index=select_default_index(target_options, default_target),
+            key="daily_signal_score_target_col",
+        )
+
+        signal_date = st.date_input(
+            "T0 date",
+            value=available_dates[0],
+            min_value=available_dates[-1],
+            max_value=available_dates[0],
+            key="daily_signal_score_date",
+        )
+
+        min_total_score = st.number_input(
+            "Min total score",
+            min_value=-500,
+            max_value=500,
+            value=-500,
+            step=1,
+            key="daily_signal_score_min_total",
+        )
+
+        search_code = st.text_input(
+            "Search code",
+            value="",
+            placeholder="optional",
+            key="daily_signal_score_search_code",
+        ).strip()
+
+        if st.button("Reload daily score data", use_container_width=True, key="daily_signal_score_reload"):
+            st.cache_data.clear()
+            st.rerun()
+
+    output_dir = DEFAULT_ANALYZE_POOL_OUTPUT_DIR / safe_pool_name(pool_path) / str(target_col)
+    bucket_path = output_dir / "indicator_bucket_detail.csv"
+
+    bucket_df = load_csv_if_exists(str(bucket_path)) if bucket_path.exists() else pd.DataFrame()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(auto_card("Pool", format_pool_option(pool_path)), unsafe_allow_html=True)
+    c2.markdown(auto_card("Target", target_col), unsafe_allow_html=True)
+    c3.markdown(auto_card("Bucket rows", f"{len(bucket_df):,}"), unsafe_allow_html=True)
+    c4.markdown(auto_card("T0 date", signal_date), unsafe_allow_html=True)
+
+    if bucket_df.empty:
+        st.warning("No bucket detail output found. Run Analyze Pool Indicator first.")
+        st.code(str(output_dir), language="text")
+        return
+
+    if "factor" not in bucket_df.columns or "bucket" not in bucket_df.columns:
+        st.error("indicator_bucket_detail.csv must contain factor and bucket columns.")
+        st.dataframe(clean_display_df(bucket_df.head(50)), use_container_width=True)
+        return
+
+    day_df = pool_df[pool_df["date"].dt.date == signal_date].copy()
+
+    if day_df.empty:
+        st.warning(f"No selected pool rows found on {signal_date}.")
+        return
+
+    code_col = "symbol" if "symbol" in day_df.columns else "code" if "code" in day_df.columns else None
+    if code_col is None:
+        st.error("Pool has no symbol/code column.")
+        return
+
+    def _norm_code(x: Any) -> str:
+        s = str(x).strip().lower()
+        s = s.replace(".sz", "").replace(".sh", "")
+        s = s.replace("sz.", "").replace("sh.", "")
+        s = s.replace("sz", "").replace("sh", "")
+        return s
+
+    def _num(x: Any) -> float:
+        try:
+            return float(pd.to_numeric(pd.Series([x]), errors="coerce").iloc[0])
+        except Exception:
+            return float("nan")
+
+    def _ensure_factor_value(row: pd.Series, factor: str) -> Any:
+        if factor in row.index:
+            return row.get(factor)
+
+        if factor == "t1_open_gap_pct":
+            try:
+                t1_open = _num(row.get("t1_open"))
+                close = _num(row.get("close"))
+                if pd.notna(t1_open) and pd.notna(close) and float(close) != 0:
+                    return (float(t1_open) / float(close) - 1.0) * 100.0
+            except Exception:
+                return pd.NA
+
+        return pd.NA
+
+    def _range_cols(df: pd.DataFrame) -> tuple[str | None, str | None]:
+        min_col = None
+        max_col = None
+
+        for c in ["min_factor", "factor_min", "min_factor_value", "bucket_min", "value_min", "min_value"]:
+            if c in df.columns:
+                min_col = c
+                break
+
+        for c in ["max_factor", "factor_max", "max_factor_value", "bucket_max", "value_max", "max_value"]:
+            if c in df.columns:
+                max_col = c
+                break
+
+        return min_col, max_col
+
+    bucket_maps: dict[str, pd.DataFrame] = {}
+
+    for factor in factors:
+        fb = bucket_df[bucket_df["factor"].astype(str) == factor].copy()
+
+        if fb.empty:
+            continue
+
+        min_col, max_col = _range_cols(fb)
+        if min_col is None or max_col is None:
+            continue
+
+        fb["_min"] = pd.to_numeric(fb[min_col], errors="coerce")
+        fb["_max"] = pd.to_numeric(fb[max_col], errors="coerce")
+        fb["_lo"] = fb[["_min", "_max"]].min(axis=1)
+        fb["_hi"] = fb[["_min", "_max"]].max(axis=1)
+        fb["_mean_return_num"] = pd.to_numeric(fb.get("mean_return", pd.Series(index=fb.index)), errors="coerce")
+        fb["_bucket_num"] = pd.to_numeric(fb["bucket"], errors="coerce")
+
+        fb = fb.dropna(subset=["_lo", "_hi", "_bucket_num"]).copy()
+
+        if fb.empty:
+            continue
+
+        fb = fb.sort_values(["_mean_return_num", "_bucket_num"], ascending=[False, True]).reset_index(drop=True)
+        fb["_bucket_rank"] = range(1, len(fb) + 1)
+        fb["_factor_score"] = 6 - fb["_bucket_rank"]
+
+        bucket_maps[factor] = fb
+
+    def _bucket_match(factor: str, value: Any) -> dict[str, Any]:
+        if factor not in bucket_maps:
+            return {
+                "bucket": "",
+                "bucket_rank": "",
+                "score": 0,
+                "bucket_interval": "",
+                "mean_return": "",
+                "up_ratio": "",
+                "sample_count": "",
+                "status": "no_bucket_output",
+            }
+
+        v = _num(value)
+
+        if pd.isna(v):
+            return {
+                "bucket": "",
+                "bucket_rank": "",
+                "score": 0,
+                "bucket_interval": "",
+                "mean_return": "",
+                "up_ratio": "",
+                "sample_count": "",
+                "status": "missing_factor_value",
+            }
+
+        fb = bucket_maps[factor]
+        matched = fb[(v >= fb["_lo"]) & (v <= fb["_hi"])].copy()
+
+        status = "ok"
+
+        if matched.empty:
+            tmp = fb.copy()
+            tmp["_distance"] = tmp.apply(
+                lambda r: min(abs(v - float(r["_lo"])), abs(v - float(r["_hi"]))),
+                axis=1,
+            )
+            matched = tmp.sort_values("_distance").head(1).copy()
+            status = "nearest_out_of_range"
+
+        row = matched.iloc[0]
+
+        return {
+            "bucket": int(row["_bucket_num"]) if pd.notna(row["_bucket_num"]) else "",
+            "bucket_rank": int(row["_bucket_rank"]) if pd.notna(row["_bucket_rank"]) else "",
+            "score": int(row["_factor_score"]) if pd.notna(row["_factor_score"]) else 0,
+            "bucket_interval": f"[{float(row['_lo']):.6f}, {float(row['_hi']):.6f}]",
+            "mean_return": row.get("mean_return", ""),
+            "up_ratio": row.get("up_ratio", ""),
+            "sample_count": row.get("sample_count", ""),
+            "status": status,
+        }
+
+    summary_rows = []
+    detail_by_code: dict[str, pd.DataFrame] = {}
+
+    for idx, signal_row in day_df.iterrows():
+        code_value = str(signal_row.get(code_col, ""))
+
+        detail_rows = []
+        total_score = 0
+        valid_factor_count = 0
+        missing_factor_count = 0
+
+        for factor in factors:
+            factor_value = _ensure_factor_value(signal_row, factor)
+            bucket_info = _bucket_match(factor, factor_value)
+
+            score = int(bucket_info["score"])
+            total_score += score
+
+            if bucket_info["status"] == "ok":
+                valid_factor_count += 1
+            else:
+                missing_factor_count += 1
+
+            detail_rows.append(
+                {
+                    "factor": factor,
+                    "factor_value": factor_value,
+                    "bucket": bucket_info["bucket"],
+                    "bucket_rank_by_mean_return": bucket_info["bucket_rank"],
+                    "score": score,
+                    "bucket_interval": bucket_info["bucket_interval"],
+                    "bucket_mean_return": bucket_info["mean_return"],
+                    "bucket_up_ratio": bucket_info["up_ratio"],
+                    "bucket_sample_count": bucket_info["sample_count"],
+                    "status": bucket_info["status"],
+                }
+            )
+
+        detail_df = pd.DataFrame(detail_rows)
+        detail_by_code[code_value] = detail_df
+
+        summary_rows.append(
+            {
+                "code": code_value,
+                "date": signal_date,
+                "total_score": total_score,
+                "valid_factor_count": valid_factor_count,
+                "missing_factor_count": missing_factor_count,
+            }
+        )
+
+    score_df = pd.DataFrame(summary_rows)
+
+    if search_code:
+        q = _norm_code(search_code)
+        score_df = score_df[
+            score_df["code"].map(_norm_code).eq(q)
+            | score_df["code"].astype(str).str.lower().str.endswith(search_code.lower())
+        ].copy()
+
+    score_df = score_df[pd.to_numeric(score_df["total_score"], errors="coerce") >= int(min_total_score)].copy()
+    score_df = score_df.sort_values(["total_score", "valid_factor_count", "code"], ascending=[False, False, True]).reset_index(drop=True)
+    score_df.insert(0, "rank", range(1, len(score_df) + 1))
+
+    st.divider()
+    section_header("Daily pool score")
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Rows", f"{len(score_df):,}")
+    s2.metric("Factors", f"{len(factors):,}")
+    s3.metric("Max score", f"{score_df['total_score'].max() if not score_df.empty else '-'}")
+    s4.metric("Min score", f"{score_df['total_score'].min() if not score_df.empty else '-'}")
+
+    if score_df.empty:
+        st.info("No rows after filter.")
+        return
+
+    summary_download_df = score_df.copy()
+    show_download(
+        summary_download_df,
+        f"daily_signal_score_{signal_date}_{target_col}.csv",
+        "Download daily score summary",
+    )
+
+    st.caption("Click the arrow on each stock row to expand factor-level bucket scoring detail.")
+
+    for _, row in score_df.iterrows():
+        code_value = str(row["code"])
+        rank_value = int(row["rank"])
+        total_score = row["total_score"]
+        valid_count = row["valid_factor_count"]
+        missing_count = row["missing_factor_count"]
+
+        title = (
+            f"#{rank_value}  {code_value}  "
+            f"| total_score={total_score}  "
+            f"| valid={valid_count}  "
+            f"| missing={missing_count}"
+        )
+
+        with st.expander(title, expanded=False):
+            head_df = pd.DataFrame(
+                [
+                    {
+                        "rank": rank_value,
+                        "code": code_value,
+                        "date": row["date"],
+                        "total_score": total_score,
+                        "valid_factor_count": valid_count,
+                        "missing_factor_count": missing_count,
+                    }
+                ]
+            )
+            st.dataframe(clean_display_df(head_df), use_container_width=True, hide_index=True, height=86)
+
+            detail_df = detail_by_code.get(code_value, pd.DataFrame())
+            if detail_df.empty:
+                st.info("No factor detail.")
+            else:
+                detail_view = detail_df.copy()
+
+                display_cols = [
+                    "factor",
+                    "factor_value",
+                    "bucket",
+                    "bucket_rank_by_mean_return",
+                    "score",
+                    "bucket_interval",
+                    "bucket_mean_return",
+                    "bucket_up_ratio",
+                    "bucket_sample_count",
+                    "status",
+                ]
+
+                for numeric_col in [
+                    "factor_value",
+                    "bucket",
+                    "bucket_rank_by_mean_return",
+                    "score",
+                    "bucket_mean_return",
+                    "bucket_up_ratio",
+                    "bucket_sample_count",
+                ]:
+                    if numeric_col in detail_view.columns:
+                        detail_view[numeric_col] = pd.to_numeric(detail_view[numeric_col], errors="coerce")
+
+                if "score" in detail_view.columns:
+                    detail_view = detail_view.sort_values(
+                        ["score", "bucket_rank_by_mean_return", "factor"],
+                        ascending=[False, True, True],
+                    )
+
+                display_cols = [c for c in display_cols if c in detail_view.columns]
+                detail_view = detail_view[
+                    display_cols + [c for c in detail_view.columns if c not in display_cols]
+                ].copy()
+
+                detail_view = detail_view.rename(
+                    columns={
+                        "factor": "Factor",
+                        "factor_value": "Factor Value",
+                        "bucket": "Bucket",
+                        "bucket_rank_by_mean_return": "Bucket Rank",
+                        "score": "Factor Score",
+                        "bucket_interval": "Bucket Interval",
+                        "bucket_mean_return": "Bucket Mean Return",
+                        "bucket_up_ratio": "Bucket Up Ratio",
+                        "bucket_sample_count": "Bucket Sample Count",
+                        "status": "Match Status",
+                    }
+                )
+
+                def _make_unique_columns(cols: list[str]) -> list[str]:
+                    seen: dict[str, int] = {}
+                    unique_cols: list[str] = []
+
+                    for col in cols:
+                        base = str(col)
+                        count = seen.get(base, 0)
+
+                        if count == 0:
+                            unique_cols.append(base)
+                        else:
+                            unique_cols.append(f"{base}_{count + 1}")
+
+                        seen[base] = count + 1
+
+                    return unique_cols
+
+                detail_view.columns = _make_unique_columns([str(c) for c in detail_view.columns])
+
+                st.caption(
+                    "Bucket Rank is sorted by bucket mean_return descending: "
+                    "rank 1 = 5 points, rank 2 = 4 points, each lower rank subtracts 1 point."
+                )
+                st.dataframe(clean_display_df(detail_view), use_container_width=True, hide_index=True, height=520)
+
+                show_download(
+                    detail_view,
+                    f"daily_signal_score_detail_{code_value}_{signal_date}_{target_col}.csv",
+                    f"Download {code_value} factor detail",
+                )
+
+
 # ======================================================================================
 # App router
 # ======================================================================================
@@ -1644,6 +2107,7 @@ with st.sidebar:
             "Analyze Pool Indicator",
             "Single Factor Analysis",
             "Signal Analysis",
+            "Daily Signal Score",
         ],
         index=1,
     )
@@ -1701,3 +2165,5 @@ elif page == "Single Factor Analysis":
     render_single_factor_analysis(selected_pool_path)
 elif page == "Signal Analysis":
     render_signal_analysis(selected_pool_path)
+elif page == "Daily Signal Score":
+    render_daily_signal_score_analysis(selected_pool_path)
