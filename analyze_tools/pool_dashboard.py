@@ -1304,6 +1304,328 @@ def render_single_factor_analysis(default_pool_path: Path | None) -> None:
 
 
 
+
+def render_signal_analysis(default_pool_path: Path | None) -> None:
+    page_header("Signal Analysis", pool_path=default_pool_path)
+
+    if default_pool_path is None:
+        st.error("No pool file selected.")
+        return
+
+    pool_path = default_pool_path
+
+    factors = [
+        "volume_ratio_prev1",
+        "amplitude_pct",
+        "daily_return_pct",
+        "body_abs_pct",
+        "volume_ratio_ma10",
+        "volume_ratio_ma5",
+        "red_vs_prev_green_ratio",
+        "upper_shadow_pct",
+        "lower_shadow_pct",
+        "t0_close_to_z_short_trend_line_pct",
+        "t0_close_to_z_long_trend_line_pct",
+        "t1_open_gap_pct",
+        "renko_value",
+        "macd_dif",
+        "macd_dea",
+        "macd_hist",
+        "intraday_return_pct",
+        "body_pct",
+    ]
+
+    try:
+        pool_df = load_pool(str(pool_path), selected_only=True)
+        all_pool_df = load_pool(str(pool_path), selected_only=False)
+        target_options = list_forward_return_targets(all_pool_df)
+    except Exception as exc:
+        st.error(f"Unable to read pool: {exc}")
+        return
+
+    if pool_df.empty:
+        st.warning("Selected pool is empty.")
+        return
+
+    if "date" not in pool_df.columns:
+        st.error("Pool missing date column.")
+        return
+
+    if not target_options:
+        st.error("No fwd_return_pct_T* target column found in this pool.")
+        return
+
+    pool_df = normalize_date_col(pool_df)
+
+    available_dates = sorted(pool_df["date"].dropna().dt.date.unique(), reverse=True)
+    if not available_dates:
+        st.warning("No valid signal date found.")
+        return
+
+    default_target = "fwd_return_pct_T1" if "fwd_return_pct_T1" in target_options else target_options[0]
+
+    with st.sidebar:
+        st.divider()
+        st.header("Signal config")
+
+        target_col = st.selectbox(
+            "Bucket target",
+            target_options,
+            index=select_default_index(target_options, default_target),
+            key="signal_target_col",
+        )
+
+        signal_date = st.date_input(
+            "T0 date",
+            value=available_dates[0],
+            min_value=available_dates[-1],
+            max_value=available_dates[0],
+            key="signal_date",
+        )
+
+        code_query = st.text_input(
+            "Stock code / symbol",
+            value="",
+            placeholder="?? 002595",
+            key="signal_code_query",
+        ).strip()
+
+        if st.button("Reload signal data", use_container_width=True, key="signal_reload"):
+            st.cache_data.clear()
+            st.rerun()
+
+    output_dir = DEFAULT_ANALYZE_POOL_OUTPUT_DIR / safe_pool_name(pool_path) / str(target_col)
+    bucket_path = output_dir / "indicator_bucket_detail.csv"
+    summary_path = output_dir / "indicator_direction_summary.csv"
+
+    bucket_df = load_csv_if_exists(str(bucket_path)) if bucket_path.exists() else pd.DataFrame()
+    summary_df = load_csv_if_exists(str(summary_path)) if summary_path.exists() else pd.DataFrame()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(auto_card("Pool", format_pool_option(pool_path)), unsafe_allow_html=True)
+    c2.markdown(auto_card("Target", target_col), unsafe_allow_html=True)
+    c3.markdown(auto_card("Bucket rows", f"{len(bucket_df):,}"), unsafe_allow_html=True)
+    c4.markdown(auto_card("T0 date", signal_date), unsafe_allow_html=True)
+
+    if bucket_df.empty:
+        st.warning("No bucket detail output found. Run Analyze Pool Indicator first.")
+        st.code(str(output_dir), language="text")
+        return
+
+    if "factor" not in bucket_df.columns or "bucket" not in bucket_df.columns:
+        st.error("indicator_bucket_detail.csv must contain factor and bucket columns.")
+        st.dataframe(clean_display_df(bucket_df.head(50)), use_container_width=True)
+        return
+
+    if not code_query:
+        st.info("Enter a stock code / symbol in the left sidebar.")
+        return
+
+    def _norm_code(x: Any) -> str:
+        s = str(x).strip().lower()
+        s = s.replace(".sz", "").replace(".sh", "")
+        s = s.replace("sz.", "").replace("sh.", "")
+        s = s.replace("sz", "").replace("sh", "")
+        return s
+
+    view = pool_df[pool_df["date"].dt.date == signal_date].copy()
+
+    code_cols = [c for c in ["symbol", "code"] if c in view.columns]
+    if not code_cols:
+        st.error("Pool has no symbol/code column.")
+        return
+
+    q = _norm_code(code_query)
+    mask = pd.Series(False, index=view.index)
+
+    for col in code_cols:
+        normalized = view[col].map(_norm_code)
+        raw = view[col].astype(str).str.strip().str.lower()
+        mask = mask | (normalized == q) | raw.eq(code_query.strip().lower()) | raw.str.endswith(code_query.strip().lower())
+
+    hit = view.loc[mask].copy()
+
+    if hit.empty:
+        st.warning(f"No selected signal found for {code_query} on {signal_date}.")
+        return
+
+    signal_row = hit.iloc[0].copy()
+
+    symbol_display = "-"
+    for col in ["symbol", "code"]:
+        if col in signal_row.index and pd.notna(signal_row.get(col)):
+            symbol_display = str(signal_row.get(col))
+            break
+
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("Code", symbol_display)
+    d2.metric("Rows matched", f"{len(hit):,}")
+    d3.metric("Date", str(signal_date))
+    d4.metric("Factor count", str(len(factors)))
+
+    def _ensure_signal_factor(row: pd.Series, factor: str) -> Any:
+        if factor in row.index:
+            return row.get(factor)
+
+        if factor == "t1_open_gap_pct":
+            try:
+                t1_open = pd.to_numeric(pd.Series([row.get("t1_open")]), errors="coerce").iloc[0]
+                close = pd.to_numeric(pd.Series([row.get("close")]), errors="coerce").iloc[0]
+                if pd.notna(t1_open) and pd.notna(close) and float(close) != 0:
+                    return (float(t1_open) / float(close) - 1.0) * 100.0
+            except Exception:
+                return pd.NA
+
+        return pd.NA
+
+    def _range_cols(df: pd.DataFrame) -> tuple[str | None, str | None, str | None]:
+        min_col = None
+        max_col = None
+        mean_col = None
+
+        for c in ["min_factor", "factor_min", "min_factor_value", "bucket_min", "value_min", "min_value"]:
+            if c in df.columns:
+                min_col = c
+                break
+
+        for c in ["max_factor", "factor_max", "max_factor_value", "bucket_max", "value_max", "max_value"]:
+            if c in df.columns:
+                max_col = c
+                break
+
+        for c in ["mean_factor", "factor_mean", "mean_factor_value"]:
+            if c in df.columns:
+                mean_col = c
+                break
+
+        return min_col, max_col, mean_col
+
+    def _bucket_for_value(factor: str, value: Any) -> dict[str, Any]:
+        factor_bucket = bucket_df[bucket_df["factor"].astype(str) == str(factor)].copy()
+
+        if factor_bucket.empty:
+            return {
+                "bucket": "",
+                "bucket_interval": "",
+                "bucket_status": "no_bucket_output",
+                "bucket_mean_return": "",
+                "bucket_up_ratio": "",
+                "bucket_sample_count": "",
+            }
+
+        min_col, max_col, _ = _range_cols(factor_bucket)
+        if min_col is None or max_col is None:
+            return {
+                "bucket": "",
+                "bucket_interval": "",
+                "bucket_status": "missing_bucket_range",
+                "bucket_mean_return": "",
+                "bucket_up_ratio": "",
+                "bucket_sample_count": "",
+            }
+
+        try:
+            v = float(pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0])
+        except Exception:
+            v = float("nan")
+
+        if pd.isna(v):
+            return {
+                "bucket": "",
+                "bucket_interval": "",
+                "bucket_status": "missing_factor_value",
+                "bucket_mean_return": "",
+                "bucket_up_ratio": "",
+                "bucket_sample_count": "",
+            }
+
+        tmp = factor_bucket.copy()
+        tmp["_min"] = pd.to_numeric(tmp[min_col], errors="coerce")
+        tmp["_max"] = pd.to_numeric(tmp[max_col], errors="coerce")
+        tmp = tmp.dropna(subset=["_min", "_max"]).copy()
+
+        if tmp.empty:
+            return {
+                "bucket": "",
+                "bucket_interval": "",
+                "bucket_status": "empty_bucket_range",
+                "bucket_mean_return": "",
+                "bucket_up_ratio": "",
+                "bucket_sample_count": "",
+            }
+
+        lo = tmp[["_min", "_max"]].min(axis=1)
+        hi = tmp[["_min", "_max"]].max(axis=1)
+        matched = tmp[(v >= lo) & (v <= hi)].copy()
+
+        status = "ok"
+        if matched.empty:
+            tmp["_distance"] = tmp.apply(
+                lambda r: min(abs(v - float(r["_min"])), abs(v - float(r["_max"]))),
+                axis=1,
+            )
+            matched = tmp.sort_values("_distance").head(1).copy()
+            status = "nearest_out_of_range"
+
+        selected_bucket = matched.iloc[0]
+
+        interval = ""
+        try:
+            interval = f"[{float(selected_bucket['_min']):.6f}, {float(selected_bucket['_max']):.6f}]"
+        except Exception:
+            interval = ""
+
+        return {
+            "bucket": selected_bucket.get("bucket", ""),
+            "bucket_interval": interval,
+            "bucket_status": status,
+            "bucket_mean_return": selected_bucket.get("mean_return", ""),
+            "bucket_up_ratio": selected_bucket.get("up_ratio", ""),
+            "bucket_sample_count": selected_bucket.get("sample_count", ""),
+        }
+
+    rows = []
+
+    for factor in factors:
+        value = _ensure_signal_factor(signal_row, factor)
+        bucket_info = _bucket_for_value(factor, value)
+
+        summary_row = summary_df[summary_df["factor"].astype(str) == factor].head(1) if not summary_df.empty and "factor" in summary_df.columns else pd.DataFrame()
+        action_hint = ""
+        bucket_pattern = ""
+
+        if not summary_row.empty:
+            action_hint = summary_row.iloc[0].get("action_hint", "")
+            bucket_pattern = summary_row.iloc[0].get("bucket_pattern", "")
+
+        rows.append(
+            {
+                "factor": factor,
+                "factor_value": value,
+                "bucket": bucket_info["bucket"],
+                "bucket_interval": bucket_info["bucket_interval"],
+                "bucket_status": bucket_info["bucket_status"],
+                "bucket_mean_return": bucket_info["bucket_mean_return"],
+                "bucket_up_ratio": bucket_info["bucket_up_ratio"],
+                "bucket_sample_count": bucket_info["bucket_sample_count"],
+                "action_hint": action_hint,
+                "bucket_pattern": bucket_pattern,
+            }
+        )
+
+    result_df = pd.DataFrame(rows)
+
+    st.divider()
+    section_header("Signal factor bucket mapping")
+
+    st.dataframe(clean_display_df(result_df), use_container_width=True, hide_index=True, height=680)
+    show_download(
+        result_df,
+        f"signal_analysis_{symbol_display}_{signal_date}_{target_col}.csv",
+        "Download signal bucket mapping",
+    )
+
+
 # ======================================================================================
 # App router
 # ======================================================================================
@@ -1321,6 +1643,7 @@ with st.sidebar:
             "Single Pool Viewer",
             "Analyze Pool Indicator",
             "Single Factor Analysis",
+            "Signal Analysis",
         ],
         index=1,
     )
@@ -1376,3 +1699,5 @@ elif page == "Analyze Pool Indicator":
     render_analyze_pool_indicator(selected_pool_path)
 elif page == "Single Factor Analysis":
     render_single_factor_analysis(selected_pool_path)
+elif page == "Signal Analysis":
+    render_signal_analysis(selected_pool_path)
