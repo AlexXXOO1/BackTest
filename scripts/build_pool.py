@@ -191,6 +191,7 @@ RENKO_EXTENSION_COLUMNS = [
     "hard_brick_turn_strong",
     "t0_close_to_z_short_trend_line_pct",
     "t0_close_to_z_long_trend_line_pct",
+    "z_short_trend_above_z_long_trend_line",
     "short_trend",
     "trend_line",
     "yellow_ma",
@@ -584,6 +585,15 @@ def add_trend_distance_factor_columns(part: pd.DataFrame) -> pd.DataFrame:
             close,
             out["z_long_trend_line"],
         )
+
+    if "z_short_trend_line" in out.columns and "z_long_trend_line" in out.columns:
+        short_line = _pool_num_series(out["z_short_trend_line"])
+        long_line = _pool_num_series(out["z_long_trend_line"])
+        valid = short_line.notna() & long_line.notna()
+        out["z_short_trend_above_z_long_trend_line"] = pd.NA
+        out.loc[valid, "z_short_trend_above_z_long_trend_line"] = (
+            short_line.loc[valid] > long_line.loc[valid]
+        ).astype(int)
 
     return out
 

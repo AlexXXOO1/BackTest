@@ -99,6 +99,10 @@ DETAIL_ID_COLS = (
     "hint_label",
 )
 
+LOW_CARDINALITY_FACTOR_COLS = {
+    "z_short_trend_above_z_long_trend_line",
+}
+
 IC_EPS = 0.005
 RETURN_EPS = 0.05
 UP_RATIO_EPS = 0.005
@@ -216,28 +220,29 @@ def _validate_target_col(df: pd.DataFrame, target_col: str) -> None:
 
 
 def _is_numeric_factor(df: pd.DataFrame, col: str) -> bool:
+    col_name = str(col)
+
     if col in EXCLUDE_COLS:
         return False
-
-    if _is_forward_label_col(col):
+    if _is_forward_label_col(col_name):
         return False
-
-    if _is_future_raw_col(col):
+    if _is_future_raw_col(col_name):
         return False
-
-    if _is_absolute_market_value_col(col):
+    if _is_absolute_market_value_col(col_name):
         return False
-
-    if pd.api.types.is_bool_dtype(df[col]):
+    if pd.api.types.is_bool_dtype(df[col]) and col_name not in LOW_CARDINALITY_FACTOR_COLS:
         return False
 
     s = _safe_numeric(df[col])
     valid_ratio = s.notna().mean()
-
     if valid_ratio < 0.3:
         return False
 
-    if s.nunique(dropna=True) < 5:
+    unique_count = s.nunique(dropna=True)
+    if col_name in LOW_CARDINALITY_FACTOR_COLS:
+        return unique_count >= 2
+
+    if unique_count < 5:
         return False
 
     return True
@@ -417,18 +422,28 @@ def analyze_indicator_direction(
         if len(tmp) < int(min_samples):
             continue
 
-        if tmp[factor].nunique(dropna=True) < int(n_bins):
-            continue
+        unique_count = tmp[factor].nunique(dropna=True)
+        is_low_cardinality_factor = str(factor) in LOW_CARDINALITY_FACTOR_COLS
 
-        try:
-            tmp["bucket"] = pd.qcut(
-                tmp[factor],
-                q=int(n_bins),
-                labels=False,
-                duplicates="drop",
-            ) + 1
-        except Exception:
-            continue
+        if is_low_cardinality_factor:
+            if unique_count < 2:
+                continue
+            ordered_values = sorted(tmp[factor].dropna().unique())
+            bucket_map = {value: idx + 1 for idx, value in enumerate(ordered_values)}
+            tmp["bucket"] = tmp[factor].map(bucket_map).astype("Int64")
+        else:
+            if unique_count < int(n_bins):
+                continue
+
+            try:
+                tmp["bucket"] = pd.qcut(
+                    tmp[factor],
+                    q=int(n_bins),
+                    labels=False,
+                    duplicates="drop",
+                ) + 1
+            except Exception:
+                continue
 
         bucket = (
             tmp.groupby("bucket", as_index=False)

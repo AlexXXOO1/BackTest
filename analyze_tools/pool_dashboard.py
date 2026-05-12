@@ -25,6 +25,27 @@ DEFAULT_SH_INDEX_DIR = DATA_ROOT / "raw_SH_index"
 
 DEFAULT_ANALYZE_POOL_SCRIPT = PROJECT_ROOT / "analyze_tools" / "analyze_pool_indicator_direction.py"
 DEFAULT_ANALYZE_POOL_OUTPUT_DIR = DATA_ROOT / "output" / "analyze_pool_indicator_dashboard_v3"
+DEFAULT_ANALYSIS_FACTOR_COLS = (
+    "volume_ratio_prev1",
+    "amplitude_pct",
+    "daily_return_pct",
+    "body_abs_pct",
+    "volume_ratio_ma10",
+    "volume_ratio_ma5",
+    "red_vs_prev_green_ratio",
+    "upper_shadow_pct",
+    "lower_shadow_pct",
+    "t0_close_to_z_short_trend_line_pct",
+    "t0_close_to_z_long_trend_line_pct",
+    "t1_open_gap_pct",
+    "renko_value",
+    "macd_dif",
+    "macd_dea",
+    "macd_hist",
+    "intraday_return_pct",
+    "z_short_trend_above_z_long_trend_line",
+)
+
 
 st.set_page_config(
     page_title="Pool Dashboard",
@@ -894,6 +915,8 @@ def render_analyze_pool_indicator(default_pool_path: Path | None) -> None:
         str(int(bucket_count)),
         "--min-samples",
         str(int(min_samples)),
+        "--factor-cols",
+        ",".join(DEFAULT_ANALYSIS_FACTOR_COLS),
     ]
 
     run_btn = bool(st.session_state.pop("run_indicator_summary", False))
@@ -915,6 +938,7 @@ def render_analyze_pool_indicator(default_pool_path: Path | None) -> None:
         with st.spinner("Running analyze pool indicator..."):
             code, stdout, stderr, elapsed = run_subprocess(cmd, cwd=PROJECT_ROOT)
 
+        st.cache_data.clear()
         st.session_state["indicator_last_output_dir"] = str(output_dir)
 
         if code == 0:
@@ -1314,26 +1338,7 @@ def render_signal_analysis(default_pool_path: Path | None) -> None:
 
     pool_path = default_pool_path
 
-    factors = [
-        "volume_ratio_prev1",
-        "amplitude_pct",
-        "daily_return_pct",
-        "body_abs_pct",
-        "volume_ratio_ma10",
-        "volume_ratio_ma5",
-        "red_vs_prev_green_ratio",
-        "upper_shadow_pct",
-        "lower_shadow_pct",
-        "t0_close_to_z_short_trend_line_pct",
-        "t0_close_to_z_long_trend_line_pct",
-        "t1_open_gap_pct",
-        "renko_value",
-        "macd_dif",
-        "macd_dea",
-        "macd_hist",
-        "intraday_return_pct",
-        "body_pct",
-    ]
+    factors = list(DEFAULT_ANALYSIS_FACTOR_COLS)
 
     try:
         pool_df = load_pool(str(pool_path), selected_only=True)
@@ -1636,26 +1641,7 @@ def render_daily_signal_score_analysis(default_pool_path: Path | None) -> None:
 
     pool_path = default_pool_path
 
-    factors = [
-        "volume_ratio_prev1",
-        "amplitude_pct",
-        "daily_return_pct",
-        "body_abs_pct",
-        "volume_ratio_ma10",
-        "volume_ratio_ma5",
-        "red_vs_prev_green_ratio",
-        "upper_shadow_pct",
-        "lower_shadow_pct",
-        "t0_close_to_z_short_trend_line_pct",
-        "t0_close_to_z_long_trend_line_pct",
-        "t1_open_gap_pct",
-        "renko_value",
-        "macd_dif",
-        "macd_dea",
-        "macd_hist",
-        "intraday_return_pct",
-        "body_pct",
-    ]
+    factors = list(DEFAULT_ANALYSIS_FACTOR_COLS)
 
     try:
         pool_df = load_pool(str(pool_path), selected_only=True)
