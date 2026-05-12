@@ -193,8 +193,6 @@ RENKO_EXTENSION_COLUMNS = [
     "z_long_trend_line",
     "t0_close_to_z_short_trend_line_pct",
     "t0_close_to_z_long_trend_line_pct",
-    "t0_close_to_tdx_short_trend_line_pct",
-    "t0_close_to_tdx_long_trend_line_pct",
     "short_trend",
     "trend_line",
     "yellow_ma",
@@ -556,8 +554,6 @@ def add_trend_distance_factor_columns(part: pd.DataFrame) -> pd.DataFrame:
     trend_distance_cols = [
         "t0_close_to_z_short_trend_line_pct",
         "t0_close_to_z_long_trend_line_pct",
-        "t0_close_to_tdx_short_trend_line_pct",
-        "t0_close_to_tdx_long_trend_line_pct",
     ]
 
     for col in trend_distance_cols:
@@ -579,18 +575,6 @@ def add_trend_distance_factor_columns(part: pd.DataFrame) -> pd.DataFrame:
         out["t0_close_to_z_long_trend_line_pct"] = _pool_safe_pct_distance(
             close,
             out["z_long_trend_line"],
-        )
-
-    if "short_trend" in out.columns:
-        out["t0_close_to_tdx_short_trend_line_pct"] = _pool_safe_pct_distance(
-            close,
-            out["short_trend"],
-        )
-
-    if "trend_line" in out.columns:
-        out["t0_close_to_tdx_long_trend_line_pct"] = _pool_safe_pct_distance(
-            close,
-            out["trend_line"],
         )
 
     return out
@@ -849,7 +833,7 @@ def save_outputs(
     pool: pd.DataFrame,
     output_dir: Path,
     strategy_name: str,
-    save_csv: bool = True,
+    save_csv: bool = False,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)

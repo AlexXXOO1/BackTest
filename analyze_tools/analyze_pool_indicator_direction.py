@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 
-ANALYSIS_SCHEMA_VERSION = "factor_shape_v11_pool_trend_distance_only"
+ANALYSIS_SCHEMA_VERSION = "factor_shape_v12_z_trend_distance_only"
 
 EXCLUDE_COLS = {
     "date",
