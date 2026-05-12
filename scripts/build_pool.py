@@ -838,7 +838,6 @@ def build_pool(
 
     return pool
 
-
 def save_outputs(
     pool: pd.DataFrame,
     output_dir: Path,

@@ -1152,6 +1152,57 @@ def render_single_factor_analysis(default_pool_path: Path | None) -> None:
     if "bucket" in factor_bucket.columns:
         factor_bucket = factor_bucket.sort_values("bucket")
 
+    st.divider()
+    section_header("Bucket intervals")
+
+    def _bucket_interval_view(df_bucket: pd.DataFrame) -> pd.DataFrame:
+        view = df_bucket.copy()
+
+        if "bucket" not in view.columns:
+            return pd.DataFrame()
+
+        min_col = "min_factor" if "min_factor" in view.columns else "factor_min" if "factor_min" in view.columns else None
+        max_col = "max_factor" if "max_factor" in view.columns else "factor_max" if "factor_max" in view.columns else None
+        mean_col = "mean_factor" if "mean_factor" in view.columns else "factor_mean" if "factor_mean" in view.columns else None
+
+        cols = ["bucket"]
+
+        if min_col is not None and max_col is not None:
+            min_v = pd.to_numeric(view[min_col], errors="coerce")
+            max_v = pd.to_numeric(view[max_col], errors="coerce")
+            view["factor_interval"] = [
+                f"[{lo:.6f}, {hi:.6f}]"
+                if pd.notna(lo) and pd.notna(hi)
+                else ""
+                for lo, hi in zip(min_v, max_v)
+            ]
+            cols.extend(["factor_interval", min_col, max_col])
+
+        if mean_col is not None:
+            cols.append(mean_col)
+
+        for c in [
+            "sample_count",
+            "mean_return",
+            "median_return",
+            "up_ratio",
+            "win_count",
+            "loss_count",
+        ]:
+            if c in view.columns:
+                cols.append(c)
+
+        cols = [c for c in cols if c in view.columns]
+        return view[cols].copy()
+
+    interval_view = _bucket_interval_view(factor_bucket)
+
+    if interval_view.empty:
+        st.warning("No bucket interval columns found. Expected min_factor/max_factor or factor_min/factor_max.")
+    else:
+        st.dataframe(clean_display_df(interval_view), use_container_width=True, hide_index=True, height=360)
+        show_download(interval_view, f"single_factor_{factor}_{target_col}_bucket_intervals.csv", "Download bucket intervals")
+
     required_chart_cols = {"bucket", "mean_return", "up_ratio"}
     if required_chart_cols.issubset(set(factor_bucket.columns)):
         st.plotly_chart(build_bucket_factor_chart(factor_bucket, factor), use_container_width=True)
