@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 
-ANALYSIS_SCHEMA_VERSION = "factor_shape_v14_drop_raw_z_lines"
+ANALYSIS_SCHEMA_VERSION = "factor_shape_v13_drop_renko_intermediate"
 
 EXCLUDE_COLS = {
     "date",
@@ -25,6 +25,8 @@ EXCLUDE_COLS = {
     "score_pct",
     "renko_ref1",
     "renko_ref2",
+    "prev_green_brick_len",
+    "red_brick_len",
 }
 
 
