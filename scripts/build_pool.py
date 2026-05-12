@@ -189,8 +189,6 @@ RENKO_EXTENSION_COLUMNS = [
     "brick_reversal_strength",
     "brick_reversal_ratio",
     "hard_brick_turn_strong",
-    "z_short_trend_line",
-    "z_long_trend_line",
     "t0_close_to_z_short_trend_line_pct",
     "t0_close_to_z_long_trend_line_pct",
     "short_trend",
@@ -257,6 +255,16 @@ RENKO_EXTENSION_COLUMNS = [
     "v4_net_hint_score",
     "v4_hint_label",
 ]
+
+RAW_ABSOLUTE_POOL_DROP_COLUMNS = {
+    "z_short_trend_line",
+    "z_long_trend_line",
+}
+
+FINAL_POOL_DROP_COLUMNS = {
+    "renko_ref1",
+    "renko_ref2",
+}
 
 FORWARD_COLUMNS = [
     "t1_date",
@@ -754,6 +762,8 @@ def normalize_pool_schema(pool: pd.DataFrame, strategy_name: str) -> pd.DataFram
     out = _strip_strategy_prefix_columns(out)
     out = _drop_duplicate_named_columns(out)
     out = _coerce_common_types(out)
+    out = out.drop(columns=[c for c in FINAL_POOL_DROP_COLUMNS if c in out.columns], errors="ignore")
+    out = out.drop(columns=[c for c in RAW_ABSOLUTE_POOL_DROP_COLUMNS if c in out.columns], errors="ignore")
 
     preferred = _preferred_columns_for_strategy(strategy_name)
     ordered = [c for c in preferred if c in out.columns]
