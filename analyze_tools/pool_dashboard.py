@@ -1016,15 +1016,240 @@ def render_analyze_pool_indicator(default_pool_path: Path | None) -> None:
 
 def render_single_factor_analysis(default_pool_path: Path | None) -> None:
     page_header("Single Factor Analysis", pool_path=default_pool_path)
-    st.markdown(
-        """
-        <div class="soft-card">
-            <b>??????</b><br/>
-            <span style="color:#64748b;">????????????????????</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+
+    if default_pool_path is None:
+        st.error("No pool file selected.")
+        return
+
+    pool_path = default_pool_path
+
+    try:
+        target_source_df = load_pool(str(pool_path), selected_only=False)
+        target_options = list_forward_return_targets(target_source_df)
+    except Exception as exc:
+        st.error(f"Unable to read pool columns: {exc}")
+        return
+
+    if not target_options:
+        st.error("No fwd_return_pct_T* target column found in this pool.")
+        return
+
+    default_target = "fwd_return_pct_T2" if "fwd_return_pct_T2" in target_options else target_options[0]
+
+    with st.sidebar:
+        st.divider()
+        st.header("Single factor config")
+        target_col = st.selectbox(
+            "Target",
+            target_options,
+            index=select_default_index(target_options, default_target),
+            key="single_factor_target_col",
+        )
+
+        if st.button("Reload factor output", use_container_width=True, key="single_factor_reload"):
+            st.cache_data.clear()
+            st.rerun()
+
+    output_dir = DEFAULT_ANALYZE_POOL_OUTPUT_DIR / safe_pool_name(pool_path) / str(target_col)
+    summary_path = output_dir / "indicator_direction_summary.csv"
+    bucket_path = output_dir / "indicator_bucket_detail.csv"
+    member_path = output_dir / "indicator_bucket_member_detail.csv"
+
+    summary_df = load_csv_if_exists(str(summary_path)) if summary_path.exists() else pd.DataFrame()
+    bucket_df = load_csv_if_exists(str(bucket_path)) if bucket_path.exists() else pd.DataFrame()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(auto_card("Pool", format_pool_option(pool_path)), unsafe_allow_html=True)
+    c2.markdown(auto_card("Target", target_col), unsafe_allow_html=True)
+    c3.markdown(auto_card("Summary rows", f"{len(summary_df):,}"), unsafe_allow_html=True)
+    c4.markdown(auto_card("Bucket rows", f"{len(bucket_df):,}"), unsafe_allow_html=True)
+
+    if summary_df.empty or bucket_df.empty:
+        st.warning("No factor bucket output found. Please run Analyze Pool Indicator first.")
+        st.code(str(output_dir), language="text")
+        return
+
+    if "factor" not in summary_df.columns or "factor" not in bucket_df.columns:
+        st.error("Required column missing: factor")
+        st.dataframe(clean_display_df(summary_df.head(50)), use_container_width=True)
+        return
+
+    factor_options = sorted(summary_df["factor"].dropna().astype(str).unique().tolist())
+    if not factor_options:
+        st.warning("No factor found in summary output.")
+        return
+
+    def _factor_label(factor: str) -> str:
+        row = summary_df[summary_df["factor"].astype(str) == factor].head(1)
+        if row.empty:
+            return factor
+        parts = [factor]
+        for col in ["action_hint", "bucket_pattern", "risk_side"]:
+            if col in row.columns:
+                val = str(row.iloc[0].get(col, "")).strip()
+                if val and val.lower() != "nan":
+                    parts.append(val)
+        return "  |  ".join(parts)
+
+    label_to_factor = {_factor_label(f): f for f in factor_options}
+    factor_labels = list(label_to_factor.keys())
+
+    with st.sidebar:
+        selected_factor_label = st.selectbox(
+            "Factor",
+            factor_labels,
+            index=0,
+            key="single_factor_selected_factor",
+        )
+
+    factor = label_to_factor[selected_factor_label]
+
+    st.divider()
+    section_header("Factor summary")
+
+    summary_row = summary_df[summary_df["factor"].astype(str) == factor].head(1).copy()
+    if summary_row.empty:
+        st.error(f"Factor not found in summary: {factor}")
+        return
+
+    row = summary_row.iloc[0]
+
+    card_specs = [
+        ("Factor", factor),
+        ("Pattern", row.get("bucket_pattern", "-")),
+        ("Action", row.get("action_hint", "-")),
+        ("Risk side", row.get("risk_side", "-")),
+        ("Samples", row.get("sample_count", "-")),
+    ]
+    cards = st.columns(len(card_specs))
+    for col, (label, value) in zip(cards, card_specs):
+        col.markdown(auto_card(label, value), unsafe_allow_html=True)
+
+    ic_specs = [
+        ("Spearman IC", row.get("spearman_ic", "-")),
+        ("Pearson IC", row.get("pearson_ic", "-")),
+        ("Best bucket", row.get("best_bucket", "-")),
+        ("Worst bucket", row.get("worst_bucket", "-")),
+        ("Best-Worst return", row.get("best_minus_worst_return", "-")),
+    ]
+    ic_cards = st.columns(len(ic_specs))
+    for col, (label, value) in zip(ic_cards, ic_specs):
+        col.markdown(auto_card(label, value), unsafe_allow_html=True)
+
+    if "pattern_reason" in summary_row.columns:
+        reason = str(row.get("pattern_reason", "")).strip()
+        if reason and reason.lower() != "nan":
+            st.info(reason)
+
+    st.divider()
+    section_header("Bucket performance")
+
+    factor_bucket = bucket_df[bucket_df["factor"].astype(str) == factor].copy()
+    if factor_bucket.empty:
+        st.warning(f"No bucket detail found for factor: {factor}")
+        return
+
+    if "bucket" in factor_bucket.columns:
+        factor_bucket = factor_bucket.sort_values("bucket")
+
+    required_chart_cols = {"bucket", "mean_return", "up_ratio"}
+    if required_chart_cols.issubset(set(factor_bucket.columns)):
+        st.plotly_chart(build_bucket_factor_chart(factor_bucket, factor), use_container_width=True)
+    else:
+        st.warning("Bucket chart skipped because required columns are missing: bucket / mean_return / up_ratio")
+
+    value_cols = [
+        c for c in factor_bucket.columns
+        if str(c).lower() in {
+            "factor_min",
+            "factor_max",
+            "factor_mean",
+            "factor_median",
+            "factor_q25",
+            "factor_q75",
+            "min_factor_value",
+            "max_factor_value",
+        }
+    ]
+
+    if "bucket" in factor_bucket.columns and value_cols:
+        value_fig = go.Figure()
+        for c in value_cols:
+            y = pd.to_numeric(factor_bucket[c], errors="coerce")
+            if y.notna().any():
+                value_fig.add_trace(
+                    go.Scatter(
+                        x=factor_bucket["bucket"],
+                        y=y,
+                        mode="lines+markers",
+                        name=str(c),
+                        line=dict(width=2),
+                        marker=dict(size=6),
+                    )
+                )
+        value_fig = apply_plotly_layout(
+            value_fig,
+            title=f"Factor value by bucket: {factor}",
+            yaxis_title="Factor value",
+            height=420,
+        )
+        st.plotly_chart(value_fig, use_container_width=True)
+
+    preferred_cols = [
+        "factor",
+        "target_col",
+        "bucket",
+        "bucket_label",
+        "sample_count",
+        "factor_min",
+        "factor_max",
+        "factor_mean",
+        "factor_median",
+        "mean_return",
+        "median_return",
+        "up_ratio",
+        "win_count",
+        "loss_count",
+        "best_bucket",
+        "worst_bucket",
+    ]
+    preferred_cols = [c for c in preferred_cols if c in factor_bucket.columns]
+    table_view = factor_bucket[preferred_cols + [c for c in factor_bucket.columns if c not in preferred_cols]].copy()
+
+    st.dataframe(clean_display_df(table_view), use_container_width=True, height=520)
+    show_download(table_view, f"single_factor_{factor}_{target_col}_bucket_detail.csv", "Download bucket detail")
+
+    st.divider()
+    section_header("Member detail")
+
+    if not member_path.exists():
+        st.caption("Member detail is not generated by default. Use --export-member-detail only for small factor sets.")
+        return
+
+    with st.expander("Load member detail for this factor", expanded=False):
+        st.warning("This file can be large. Load only when you really need row-level bucket members.")
+        max_rows = st.number_input(
+            "Max rows to display",
+            min_value=100,
+            max_value=100000,
+            value=5000,
+            step=100,
+            key="single_factor_member_max_rows",
+        )
+        if st.button("Load member detail", key="single_factor_load_member"):
+            member_df = load_csv_if_exists(str(member_path))
+            if member_df.empty or "factor" not in member_df.columns:
+                st.info("No member detail available.")
+            else:
+                member_view = member_df[member_df["factor"].astype(str) == factor].copy()
+                if member_view.empty:
+                    st.info(f"No member rows found for factor: {factor}")
+                else:
+                    member_view = member_view.head(int(max_rows)).copy()
+                    ordered_cols = preferred_bucket_member_cols(member_view)
+                    member_view = member_view[ordered_cols]
+                    st.dataframe(clean_display_df(member_view), use_container_width=True, height=520)
+                    show_download(member_view, f"single_factor_{factor}_{target_col}_member_detail.csv", "Download member detail")
 
 
 
