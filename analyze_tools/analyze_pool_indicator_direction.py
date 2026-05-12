@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 
-ANALYSIS_SCHEMA_VERSION = "factor_shape_v8_t1_open_gap_fixed"
+ANALYSIS_SCHEMA_VERSION = "factor_shape_v10_t1_open_gap_ast_fixed"
 
 EXCLUDE_COLS = {
     "date",
@@ -175,10 +175,6 @@ def _is_invalid_forward_target_col(col: str) -> bool:
 
 def _is_future_raw_col(col: str) -> bool:
     c = str(col).strip().lower()
-
-    # T day signal, T+1 open entry.
-    # t1_open is executable but still excluded as absolute price elsewhere.
-    # t1_open_gap_pct is allowed because it is a relative executable-entry feature.
     return c in FUTURE_RAW_EXCLUDE_COLS
 
 
@@ -380,6 +376,7 @@ def analyze_indicator_direction(
     export_member_detail: bool = False,
 ) -> IndicatorDirectionResult:
     """Analyze factor bucket shape without treating forward, future raw, or absolute market value columns as factors."""
+    df = _add_executable_entry_features(df.copy())
 
     _validate_target_col(df, target_col)
 
