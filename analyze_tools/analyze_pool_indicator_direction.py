@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 
-ANALYSIS_SCHEMA_VERSION = "factor_shape_v10_t1_open_gap_ast_fixed"
+ANALYSIS_SCHEMA_VERSION = "factor_shape_v11_pool_trend_distance_only"
 
 EXCLUDE_COLS = {
     "date",
@@ -27,13 +27,19 @@ EXCLUDE_COLS = {
 
 
 ABSOLUTE_MARKET_VALUE_COLS = {
-    "open",
+    "amount",
+    "close",
     "high",
     "low",
-    "close",
+    "open",
+    "short_trend",
     "t1_open",
+    "tdx_long_trend_line",
+    "tdx_short_trend_line",
+    "trend_line",
     "volume",
-    "amount",
+    "z_long_trend_line",
+    "z_short_trend_line",
 }
 
 ABSOLUTE_MARKET_VALUE_PREFIX_NUMBER_COLS = (
@@ -115,11 +121,14 @@ def _safe_float(x) -> float:
 
 
 def _add_executable_entry_features(df: pd.DataFrame) -> pd.DataFrame:
-    if "t1_open" in df.columns and "close" in df.columns:
-        t1_open = _safe_numeric(df["t1_open"])
-        close = _safe_numeric(df["close"])
-        df["t1_open_gap_pct"] = np.where(close > 0, (t1_open / close - 1.0) * 100.0, np.nan)
-    return df
+    out = df.copy()
+
+    if "t1_open" in out.columns and "close" in out.columns:
+        t1_open = _safe_numeric(out["t1_open"])
+        close = _safe_numeric(out["close"])
+        out["t1_open_gap_pct"] = np.where(close > 0, (t1_open / close - 1.0) * 100.0, np.nan)
+
+    return out
 
 
 

@@ -191,6 +191,10 @@ RENKO_EXTENSION_COLUMNS = [
     "hard_brick_turn_strong",
     "z_short_trend_line",
     "z_long_trend_line",
+    "t0_close_to_z_short_trend_line_pct",
+    "t0_close_to_z_long_trend_line_pct",
+    "t0_close_to_tdx_short_trend_line_pct",
+    "t0_close_to_tdx_long_trend_line_pct",
     "short_trend",
     "trend_line",
     "yellow_ma",
@@ -535,6 +539,62 @@ def _attach_missing_indicator_columns(part: pd.DataFrame, group: pd.DataFrame) -
     return out
 
 
+
+def _pool_num_series(s: pd.Series) -> pd.Series:
+    return pd.to_numeric(s, errors="coerce")
+
+
+def _pool_safe_pct_distance(close: pd.Series, line: pd.Series) -> pd.Series:
+    close_num = _pool_num_series(close)
+    line_num = _pool_num_series(line).replace(0, float("nan"))
+    return (close_num / line_num - 1.0) * 100.0
+
+
+def add_trend_distance_factor_columns(part: pd.DataFrame) -> pd.DataFrame:
+    out = part.copy()
+
+    trend_distance_cols = [
+        "t0_close_to_z_short_trend_line_pct",
+        "t0_close_to_z_long_trend_line_pct",
+        "t0_close_to_tdx_short_trend_line_pct",
+        "t0_close_to_tdx_long_trend_line_pct",
+    ]
+
+    for col in trend_distance_cols:
+        if col not in out.columns:
+            out[col] = pd.NA
+
+    if out.empty or "close" not in out.columns:
+        return out
+
+    close = _pool_num_series(out["close"])
+
+    if "z_short_trend_line" in out.columns:
+        out["t0_close_to_z_short_trend_line_pct"] = _pool_safe_pct_distance(
+            close,
+            out["z_short_trend_line"],
+        )
+
+    if "z_long_trend_line" in out.columns:
+        out["t0_close_to_z_long_trend_line_pct"] = _pool_safe_pct_distance(
+            close,
+            out["z_long_trend_line"],
+        )
+
+    if "short_trend" in out.columns:
+        out["t0_close_to_tdx_short_trend_line_pct"] = _pool_safe_pct_distance(
+            close,
+            out["short_trend"],
+        )
+
+    if "trend_line" in out.columns:
+        out["t0_close_to_tdx_long_trend_line_pct"] = _pool_safe_pct_distance(
+            close,
+            out["trend_line"],
+        )
+
+    return out
+
 def _build_forward_lookup(group: pd.DataFrame) -> pd.DataFrame:
     required = ["date", "open", "close"]
     missing = [c for c in required if c not in group.columns]
@@ -635,6 +695,16 @@ def _strip_strategy_prefix_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+
+def _safe_to_numeric_if_possible(s: pd.Series) -> pd.Series:
+    converted = pd.to_numeric(s, errors="coerce")
+
+    original_non_na = s.notna()
+    if original_non_na.any() and converted[original_non_na].notna().sum() == 0:
+        return s
+
+    return converted
+
 def _coerce_common_types(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
@@ -659,8 +729,7 @@ def _coerce_common_types(df: pd.DataFrame) -> pd.DataFrame:
 
     for col in numeric_cols:
         if out[col].dtype == "object":
-            converted = pd.to_numeric(out[col], errors="ignore")
-            out[col] = converted
+            out[col] = _safe_to_numeric_if_possible(out[col])
 
     return out
 
@@ -755,6 +824,7 @@ def build_pool(
                 part = selected_df[selected_df["selected"] == 1].copy()
 
             if not part.empty:
+                part = add_trend_distance_factor_columns(part)
                 part = add_forward_fields_from_t1_open(part, g)
                 parts.append(part)
 
