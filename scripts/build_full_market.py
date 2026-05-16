@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
@@ -6,9 +6,16 @@ from typing import Dict, Iterable, List
 
 import pandas as pd
 
-DEFAULT_DATA_ROOT = Path(r"C:\Users\zyf37\Desktop\BackTest_Data")
-DEFAULT_MARKET_CACHE_DIR = DEFAULT_DATA_ROOT / "market_cache" / "daily_bars_by_symbol"
-DEFAULT_OUTPUT_PATH = DEFAULT_DATA_ROOT / "pools" / "full_market_pool.parquet"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+import sys
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from core.path_manager import DATA_ROOT, MARKET_CACHE_DIR, POOLS_DIR
+
+DEFAULT_DATA_ROOT = DATA_ROOT
+DEFAULT_MARKET_CACHE_DIR = MARKET_CACHE_DIR
+DEFAULT_OUTPUT_PATH = POOLS_DIR / "full_market_pool.parquet"
 
 OUTPUT_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount"]
 

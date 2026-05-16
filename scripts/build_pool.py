@@ -6,15 +6,15 @@ Generic pool builder.
 
 Purpose:
 - Read indicator cache.
-- Dynamically load any selection strategy from selection_strategies/.
+- Dynamically load any selection strategy from strategies/selection/.
 - Run strategy per symbol.
-- Keep selected rows.
-- Add executable forward fields using T+1 open as buy price.
-- Normalize pool schema for common columns and strategy-specific extension columns.
+- Keep strategy-selected rows. A strategy may either return only selected rows or return a transient selected column.
+- Add executable forward fields through T+4 using T+1 open as buy price.
+- Normalize and validate the final pool contract before saving.
 - Save pool parquet/csv.
 
 Strategy file requirement:
-    selection_strategies/xxx.py
+    strategies/selection/xxx.py
 
 Must provide either:
     def select(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
@@ -22,15 +22,10 @@ Must provide either:
 or:
     SELECT_FUNC = select
 
-Strategy output must contain:
-    selected
+Strategy output requirement:
+    A strategy can return only selected rows, or return a transient selected column where 1 means selected.
 
-Recommended strategy output:
-    selected
-    selected_score_base
-    score_rank_key
-    score_pct
-    selection_strategy
+Final saved pool does not keep selected / selected_score_base / score_rank_key / score_pct.
 """
 
 import argparse
@@ -44,17 +39,30 @@ from typing import Any, Dict, Iterable, List, Optional
 import pandas as pd
 from tqdm import tqdm
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DATA_ROOT = Path(r"C:\Users\zyf37\Desktop\BackTest_Data")
-DEFAULT_INDICATOR_PATH = DEFAULT_DATA_ROOT / "indicator_cache" / "daily_indicators.parquet"
-DEFAULT_POOL_DIR = DEFAULT_DATA_ROOT / "pools"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from core.path_manager import DATA_ROOT, INDICATOR_CACHE_PATH, POOLS_DIR
+from core.pool_schema import (
+    POOL_SCHEMA_VERSION,
+    drop_removed_score_columns,
+    validate_pool_schema,
+)
+
+DEFAULT_DATA_ROOT = DATA_ROOT
+DEFAULT_INDICATOR_PATH = INDICATOR_CACHE_PATH
+DEFAULT_POOL_DIR = POOLS_DIR
 
 CORE_COLUMNS = [
     "symbol",
     "file",
     "date",
     "selection_strategy",
+]
+
+TRANSIENT_SELECTION_COLUMN = "selected"
+REMOVED_SCORE_COLUMNS = [
     "selected",
     "selected_score_base",
     "score",
@@ -277,12 +285,17 @@ FORWARD_COLUMNS = [
     "t3_date",
     "t3_open",
     "t3_close",
+    "t4_date",
+    "t4_open",
+    "t4_close",
     "fwd_return_pct_T1",
     "fwd_return_pct_T2",
     "fwd_return_pct_T3",
+    "fwd_return_pct_T4",
     "fwd_up_T1",
     "fwd_up_T2",
     "fwd_up_T3",
+    "fwd_up_T4",
     "forward_data_status",
 ]
 
@@ -357,15 +370,15 @@ def parse_extra_args(items: Optional[List[str]]) -> Dict[str, Any]:
 
 
 def load_strategy_func(strategy_name: str):
-    strategy_path = PROJECT_ROOT / "selection_strategies" / f"{strategy_name}.py"
+    strategy_path = PROJECT_ROOT / "strategies" / "selection" / f"{strategy_name}.py"
 
     if not strategy_path.exists():
         raise FileNotFoundError(
             f"Strategy file not found: {strategy_path}\n"
-            f"Expected: selection_strategies/{strategy_name}.py"
+            f"Expected: strategies/selection/{strategy_name}.py"
         )
 
-    module_name = f"selection_strategies.{strategy_name}"
+    module_name = f"strategies.selection.{strategy_name}"
 
     spec = importlib.util.spec_from_file_location(module_name, strategy_path)
     if spec is None or spec.loader is None:
@@ -411,6 +424,54 @@ def normalize_symbol(x) -> str:
     return ""
 
 
+
+def _enforce_canonical_kline_factors(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Force canonical OHLC-based factor definitions during pool build.
+
+    This protects build_pool from stale indicator_cache files that were generated
+    with older formula definitions.
+    """
+    required = {"symbol", "date", "open", "high", "low", "close"}
+    if not required.issubset(df.columns):
+        return df
+
+    out = df.copy(deep=False)
+
+    open_ = pd.to_numeric(out["open"], errors="coerce")
+    high = pd.to_numeric(out["high"], errors="coerce")
+    low = pd.to_numeric(out["low"], errors="coerce")
+    close = pd.to_numeric(out["close"], errors="coerce")
+
+    prev_close = close.groupby(out["symbol"], sort=False).shift(1)
+    prev_close_safe = prev_close.replace(0, pd.NA)
+
+    out["prev_close"] = prev_close
+    out["daily_return_pct"] = (close / prev_close_safe - 1.0) * 100.0
+    out["intraday_return_pct"] = (close / open_.replace(0, pd.NA) - 1.0) * 100.0
+
+    # Canonical A-share amplitude:
+    # amplitude_pct = (high - low) / previous close * 100
+    out["amplitude_pct"] = (high - low) / prev_close_safe * 100.0
+
+    out["body_pct"] = (close - open_) / prev_close_safe * 100.0
+    out["body_abs_pct"] = out["body_pct"].abs()
+
+    max_oc = pd.concat([open_, close], axis=1).max(axis=1)
+    min_oc = pd.concat([open_, close], axis=1).min(axis=1)
+
+    out["upper_shadow_pct"] = (high - max_oc) / prev_close_safe * 100.0
+    out["lower_shadow_pct"] = (min_oc - low) / prev_close_safe * 100.0
+
+    if "volume" in out.columns:
+        volume = pd.to_numeric(out["volume"], errors="coerce")
+        prev_volume = volume.groupby(out["symbol"], sort=False).shift(1)
+        out["prev_volume"] = prev_volume
+        out["volume_ratio_prev1"] = volume / prev_volume.replace(0, pd.NA)
+
+    return out
+
+
 def load_indicator_cache(indicator_path: Path) -> pd.DataFrame:
     if not indicator_path.exists():
         raise FileNotFoundError(
@@ -432,13 +493,20 @@ def load_indicator_cache(indicator_path: Path) -> pd.DataFrame:
             f"columns={list(df.columns)}"
         )
 
-    df = df.copy()
-    df["symbol"] = df["symbol"].map(normalize_symbol)
+    df = df.copy(deep=False)  # avoid duplicating the full indicator cache in memory
+    # Avoid remapping millions of rows when symbol is already normalized.
+    # Most indicator caches already store symbol as 6-digit code strings.
+    symbol_sample = df["symbol"].dropna().astype(str).head(2000)
+    if not symbol_sample.str.fullmatch(r"\d{6}").all():
+        unique_symbols = pd.Series(df["symbol"].dropna().unique())
+        symbol_map = {raw: normalize_symbol(raw) for raw in unique_symbols}
+        df["symbol"] = df["symbol"].map(symbol_map)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
     df = df.dropna(subset=["date"])
     df = df[df["symbol"] != ""]
     df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
+    df = _enforce_canonical_kline_factors(df)
 
     return df
 
@@ -458,33 +526,38 @@ def apply_date_filter(
         end_ts = pd.to_datetime(end_date)
         out = out[out["date"] <= end_ts]
 
-    return out.copy()
+    return out.copy(deep=False)  # avoid duplicating the full indicator cache in memory
 
 
 def ensure_output_columns(df: pd.DataFrame, strategy_name: str) -> pd.DataFrame:
+    """Ensure minimum strategy identity columns without requiring a score system."""
     out = df.copy()
 
-    if "selected" not in out.columns:
-        raise ValueError(
-            f"Strategy output missing required column: selected. "
-            f"Strategy={strategy_name}"
+    if TRANSIENT_SELECTION_COLUMN in out.columns:
+        out[TRANSIENT_SELECTION_COLUMN] = (
+            pd.to_numeric(out[TRANSIENT_SELECTION_COLUMN], errors="coerce")
+            .fillna(0)
+            .astype(int)
         )
-
-    out["selected"] = pd.to_numeric(out["selected"], errors="coerce").fillna(0).astype(int)
-
-    if "selected_score_base" not in out.columns:
-        out["selected_score_base"] = out["selected"]
-
-    if "score_rank_key" not in out.columns:
-        out["score_rank_key"] = 0.0
-
-    if "score_pct" not in out.columns:
-        out["score_pct"] = 0.0
 
     if "selection_strategy" not in out.columns:
         out["selection_strategy"] = strategy_name
 
     return out
+
+
+def _split_strategy_selected_rows(df: pd.DataFrame, keep_all_rows: bool = False) -> pd.DataFrame:
+    """Return pool rows from a strategy result.
+
+    Compatibility rule:
+    - If selected exists and keep_all_rows is false, keep selected == 1.
+    - If selected does not exist, assume the strategy already returned final pool rows.
+    """
+    if keep_all_rows or TRANSIENT_SELECTION_COLUMN not in df.columns:
+        return df.copy()
+
+    selected = pd.to_numeric(df[TRANSIENT_SELECTION_COLUMN], errors="coerce").fillna(0).astype(int)
+    return df.loc[selected == 1].copy()
 
 
 def _drop_duplicate_named_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -500,8 +573,8 @@ def _matches_any_pattern(name: str, patterns: Iterable[re.Pattern[str]]) -> bool
 def _drop_old_forward_columns(df: pd.DataFrame) -> pd.DataFrame:
     drop_cols = [c for c in df.columns if _matches_any_pattern(str(c), OLD_FORWARD_PATTERNS)]
     if not drop_cols:
-        return df.copy()
-    return df.drop(columns=drop_cols, errors="ignore").copy()
+        return df
+    return df.drop(columns=drop_cols, errors="ignore")
 
 
 def _attach_group_identity(part: pd.DataFrame, group: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -511,6 +584,7 @@ def _attach_group_identity(part: pd.DataFrame, group: pd.DataFrame, symbol: str)
         out["symbol"] = normalize_symbol(symbol)
     else:
         out["symbol"] = out["symbol"].map(normalize_symbol)
+        out["symbol"] = out["symbol"].copy()
         out.loc[out["symbol"] == "", "symbol"] = normalize_symbol(symbol)
 
     if "file" not in out.columns and "file" in group.columns:
@@ -521,29 +595,26 @@ def _attach_group_identity(part: pd.DataFrame, group: pd.DataFrame, symbol: str)
 
 
 def _attach_missing_indicator_columns(part: pd.DataFrame, group: pd.DataFrame) -> pd.DataFrame:
-    out = part.copy()
+    out = part.copy(deep=False)
 
     if "date" not in out.columns or "date" not in group.columns:
         return out
 
     out["date"] = pd.to_datetime(out["date"], errors="coerce")
 
-    group2 = group.copy()
-    group2["date"] = pd.to_datetime(group2["date"], errors="coerce")
-    group2 = group2.dropna(subset=["date"])
-
     add_cols = [
         c for c in REHYDRATE_COLUMNS
-        if c in group2.columns and c not in out.columns and c != "date"
+        if c in group.columns and c not in out.columns and c != "date"
     ]
 
     if not add_cols:
         return out
 
-    lookup = group2[["date", *add_cols]].drop_duplicates(subset=["date"], keep="last")
-    out = out.merge(lookup, on="date", how="left", validate="many_to_one")
+    lookup = group.loc[:, ["date", *add_cols]].copy(deep=False)
+    lookup["date"] = pd.to_datetime(lookup["date"], errors="coerce")
+    lookup = lookup.dropna(subset=["date"]).drop_duplicates(subset=["date"], keep="last")
 
-    return out
+    return out.merge(lookup, on="date", how="left", validate="many_to_one")
 
 
 
@@ -558,7 +629,7 @@ def _pool_safe_pct_distance(close: pd.Series, line: pd.Series) -> pd.Series:
 
 
 def add_trend_distance_factor_columns(part: pd.DataFrame) -> pd.DataFrame:
-    out = part.copy()
+    out = part.copy(deep=False)
 
     trend_distance_cols = [
         "t0_close_to_z_short_trend_line_pct",
@@ -590,7 +661,9 @@ def add_trend_distance_factor_columns(part: pd.DataFrame) -> pd.DataFrame:
         short_line = _pool_num_series(out["z_short_trend_line"])
         long_line = _pool_num_series(out["z_long_trend_line"])
         valid = short_line.notna() & long_line.notna()
+
         out["z_short_trend_above_z_long_trend_line"] = pd.NA
+        out["z_short_trend_above_z_long_trend_line"] = out["z_short_trend_above_z_long_trend_line"].copy()
         out.loc[valid, "z_short_trend_above_z_long_trend_line"] = (
             short_line.loc[valid] > long_line.loc[valid]
         ).astype(int)
@@ -603,23 +676,29 @@ def _build_forward_lookup(group: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Cannot add forward fields. Missing columns in indicator group: {missing}")
 
-    ref = group.copy()
+    ref = group.loc[:, required].copy(deep=False)
     ref["date"] = pd.to_datetime(ref["date"], errors="coerce")
     ref = ref.dropna(subset=["date"])
-    ref = ref.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
 
-    lookup = ref[["date"]].copy()
+    if not ref["date"].is_monotonic_increasing:
+        ref = ref.sort_values("date", kind="stable")
 
-    for horizon in (1, 2, 3):
+    ref = ref.drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
+
+    lookup = ref.loc[:, ["date"]].copy(deep=False)
+    open_num = pd.to_numeric(ref["open"], errors="coerce")
+    close_num = pd.to_numeric(ref["close"], errors="coerce")
+
+    for horizon in range(1, 5):
         lookup[f"t{horizon}_date"] = ref["date"].shift(-horizon)
-        lookup[f"t{horizon}_open"] = pd.to_numeric(ref["open"], errors="coerce").shift(-horizon)
-        lookup[f"t{horizon}_close"] = pd.to_numeric(ref["close"], errors="coerce").shift(-horizon)
+        lookup[f"t{horizon}_open"] = open_num.shift(-horizon)
+        lookup[f"t{horizon}_close"] = close_num.shift(-horizon)
 
     return lookup
 
 
 def add_forward_fields_from_t1_open(part: pd.DataFrame, group: pd.DataFrame) -> pd.DataFrame:
-    """Add T+1/T+2/T+3 prices and returns using T+1 open as buy price."""
+    """Add T+1 through T+4 prices and returns using T+1 open as buy price."""
     out = _drop_old_forward_columns(part)
 
     if out.empty:
@@ -637,7 +716,7 @@ def add_forward_fields_from_t1_open(part: pd.DataFrame, group: pd.DataFrame) -> 
     buy_price = pd.to_numeric(out["t1_open"], errors="coerce")
     valid_buy = buy_price.notna() & (buy_price > 0)
 
-    for horizon in (1, 2, 3):
+    for horizon in range(1, 5):
         close_col = f"t{horizon}_close"
         ret_col = f"fwd_return_pct_T{horizon}"
         up_col = f"fwd_up_T{horizon}"
@@ -645,6 +724,8 @@ def add_forward_fields_from_t1_open(part: pd.DataFrame, group: pd.DataFrame) -> 
         sell_close = pd.to_numeric(out[close_col], errors="coerce")
         valid = valid_buy & sell_close.notna()
         out[ret_col] = pd.NA
+        if ret_col in out.columns:
+            out[ret_col] = out[ret_col].copy()
         out.loc[valid, ret_col] = (sell_close.loc[valid] / buy_price.loc[valid] - 1.0) * 100.0
         out[ret_col] = pd.to_numeric(out[ret_col], errors="coerce")
 
@@ -657,17 +738,26 @@ def add_forward_fields_from_t1_open(part: pd.DataFrame, group: pd.DataFrame) -> 
         | out["t1_close"].isna()
         | ~valid_buy
     )
-    missing_t2_or_t3 = out["t2_date"].isna() | out["t2_close"].isna() | out["t3_date"].isna() | out["t3_close"].isna()
+    missing_t2_to_t4 = (
+        out["t2_date"].isna()
+        | out["t2_close"].isna()
+        | out["t3_date"].isna()
+        | out["t3_close"].isna()
+        | out["t4_date"].isna()
+        | out["t4_close"].isna()
+    )
 
     out["forward_data_status"] = "ok"
-    out.loc[missing_t2_or_t3, "forward_data_status"] = "partial_missing"
+    if "forward_data_status" in out.columns:
+        out["forward_data_status"] = out["forward_data_status"].copy()
+    out.loc[missing_t2_to_t4, "forward_data_status"] = "partial_missing"
     out.loc[missing_t1, "forward_data_status"] = "missing_t1"
 
     return out
 
 
 def _strip_strategy_prefix_columns(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
+    out = df.copy(deep=False)  # avoid deep-copying the pool during schema normalization
 
     drop_cols = [c for c in out.columns if _matches_any_pattern(str(c), DROP_COLUMN_PATTERNS)]
     if drop_cols:
@@ -708,13 +798,15 @@ def _safe_to_numeric_if_possible(s: pd.Series) -> pd.Series:
     return converted
 
 def _coerce_common_types(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
+    out = df.copy(deep=False)
 
     if "symbol" in out.columns:
-        out["symbol"] = out["symbol"].map(normalize_symbol)
+        symbol_sample = out["symbol"].dropna().astype(str).head(2000)
+        if not symbol_sample.str.fullmatch(r"\d{6}").all():
+            out["symbol"] = out["symbol"].map(normalize_symbol)
 
-    for col in ["date", "t1_date", "t2_date", "t3_date"]:
-        if col in out.columns:
+    for col in ["date", "t1_date", "t2_date", "t3_date", "t4_date"]:
+        if col in out.columns and not pd.api.types.is_datetime64_any_dtype(out[col]):
             out[col] = pd.to_datetime(out[col], errors="coerce")
 
     for col in ["selected", "selected_score_base"]:
@@ -723,7 +815,16 @@ def _coerce_common_types(df: pd.DataFrame) -> pd.DataFrame:
 
     numeric_cols = [
         c for c in out.columns
-        if c not in {"symbol", "file", "selection_strategy", "risk_tags", "j_condition_rule", "j_condition_source_col", "v4_hint_label", "forward_data_status"}
+        if c not in {
+            "symbol",
+            "file",
+            "selection_strategy",
+            "risk_tags",
+            "j_condition_rule",
+            "j_condition_source_col",
+            "v4_hint_label",
+            "forward_data_status",
+        }
         and not str(c).endswith("_date")
         and str(c) not in {"date"}
         and not pd.api.types.is_bool_dtype(out[c])
@@ -774,17 +875,19 @@ def normalize_pool_schema(pool: pd.DataFrame, strategy_name: str) -> pd.DataFram
     out = _coerce_common_types(out)
     out = out.drop(columns=[c for c in FINAL_POOL_DROP_COLUMNS if c in out.columns], errors="ignore")
     out = out.drop(columns=[c for c in RAW_ABSOLUTE_POOL_DROP_COLUMNS if c in out.columns], errors="ignore")
+    out = drop_removed_score_columns(out)
 
     preferred = _preferred_columns_for_strategy(strategy_name)
     ordered = [c for c in preferred if c in out.columns]
     remaining = [c for c in out.columns if c not in ordered]
 
-    out = out[[*ordered, *remaining]].copy()
+    out = out[[*ordered, *remaining]].copy(deep=False)
 
-    sort_cols = [c for c in ["date", "score_rank_key", "symbol"] if c in out.columns]
-    if sort_cols:
-        ascending = [True if c != "score_rank_key" else False for c in sort_cols]
-        out = out.sort_values(sort_cols, ascending=ascending).reset_index(drop=True)
+    # Avoid allocating another full pool copy for large pools.
+    if len(out) <= 300_000:
+        sort_cols = [c for c in ["date", "symbol"] if c in out.columns]
+        if sort_cols:
+            out = out.sort_values(sort_cols, ascending=True, kind="stable").reset_index(drop=True)
 
     return out
 
@@ -822,10 +925,7 @@ def build_pool(
             selected_df = _attach_missing_indicator_columns(selected_df, g)
             selected_df = ensure_output_columns(selected_df, strategy_name)
 
-            if keep_all_rows:
-                part = selected_df.copy()
-            else:
-                part = selected_df[selected_df["selected"] == 1].copy()
+            part = _split_strategy_selected_rows(selected_df, keep_all_rows=keep_all_rows)
 
             if not part.empty:
                 part = add_trend_distance_factor_columns(part)
@@ -845,6 +945,14 @@ def build_pool(
 
     pool = pd.concat(parts, ignore_index=True)
     pool = normalize_pool_schema(pool, strategy_name)
+    report = validate_pool_schema(pool, strategy_name=strategy_name)
+
+    print(f"[OK] Pool schema validation passed: {report.schema_version}")
+    print(f"[OK] Dynamic factor columns detected: {len(report.factor_columns)}")
+    if report.factor_columns:
+        print(report.factor_columns)
+    for warning in report.warnings:
+        print(f"[WARN] {warning}")
 
     return pool
 
@@ -860,6 +968,8 @@ def save_outputs(
     parquet_path = output_dir / f"{strategy_name}_pool.parquet"
     csv_path = output_dir / f"{strategy_name}_pool.csv"
     meta_path = output_dir / f"{strategy_name}_pool.meta.json"
+
+    schema_report = validate_pool_schema(pool, strategy_name=strategy_name)
 
     pool.to_parquet(parquet_path, index=False)
 
@@ -877,10 +987,15 @@ def save_outputs(
             "fwd_return_pct_T1": "t1_close / t1_open - 1",
             "fwd_return_pct_T2": "t2_close / t1_open - 1",
             "fwd_return_pct_T3": "t3_close / t1_open - 1",
+            "fwd_return_pct_T4": "t4_close / t1_open - 1",
             "fwd_up_T1": "t1_close > t1_open",
             "fwd_up_T2": "t2_close > t1_open",
             "fwd_up_T3": "t3_close > t1_open",
+            "fwd_up_T4": "t4_close > t1_open",
         },
+        "schema_version": POOL_SCHEMA_VERSION,
+        "factor_columns": schema_report.factor_columns,
+        "schema_warnings": schema_report.warnings,
         "columns": list(pool.columns),
     }
 
@@ -929,14 +1044,14 @@ def print_pool_summary(pool: pd.DataFrame, strategy_name: str) -> None:
         print("\nscore_rank_key describe:")
         print(pool["score_rank_key"].describe().to_string())
 
-    forward_cols = [c for c in ["fwd_return_pct_T1", "fwd_return_pct_T2", "fwd_return_pct_T3"] if c in pool.columns]
+    forward_cols = [c for c in ["fwd_return_pct_T1", "fwd_return_pct_T2", "fwd_return_pct_T3", "fwd_return_pct_T4"] if c in pool.columns]
     if forward_cols:
         print("\nforward return columns:")
         print(forward_cols)
         print("\nforward return describe:")
         print(pool[forward_cols].describe().to_string())
 
-    up_cols = [c for c in ["fwd_up_T1", "fwd_up_T2", "fwd_up_T3"] if c in pool.columns]
+    up_cols = [c for c in ["fwd_up_T1", "fwd_up_T2", "fwd_up_T3", "fwd_up_T4"] if c in pool.columns]
     if up_cols:
         print("\nforward up ratio:")
         for col in up_cols:
@@ -957,7 +1072,7 @@ def main():
         "--strategy",
         type=str,
         required=True,
-        help="Strategy module name under selection_strategies, without .py",
+        help="Strategy module name under strategies/selection, without .py",
     )
 
     parser.add_argument(
@@ -1047,6 +1162,7 @@ def main():
     print_pool_summary(pool, strategy_name)
 
     print("[INFO] Saving outputs...")
+
     paths = save_outputs(
         pool=pool,
         output_dir=output_dir,

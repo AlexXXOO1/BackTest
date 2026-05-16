@@ -11,9 +11,16 @@ import pandas as pd
 from tqdm import tqdm
 
 
-DEFAULT_DATA_ROOT = Path(r"C:\Users\zyf37\Desktop\BackTest_Data")
-DEFAULT_TXT_DIR = DEFAULT_DATA_ROOT / "raw_tdx_data"
-DEFAULT_MARKET_CACHE_DIR = DEFAULT_DATA_ROOT / "market_cache" / "daily_bars_by_symbol"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+import sys
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from core.path_manager import DATA_ROOT, RAW_TDX_TXT_DIR, MARKET_CACHE_DIR
+
+DEFAULT_DATA_ROOT = DATA_ROOT
+DEFAULT_TXT_DIR = RAW_TDX_TXT_DIR
+DEFAULT_MARKET_CACHE_DIR = MARKET_CACHE_DIR
 
 
 ENCODING_CANDIDATES = [

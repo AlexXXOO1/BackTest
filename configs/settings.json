@@ -1,0 +1,14 @@
+{
+  "code_root": "C:\\Users\\zyf37\\Desktop\\BackTest_App",
+  "data_root": "C:\\Users\\zyf37\\Desktop\\BackTest_Data",
+  "paths": {
+    "raw_tdx_data": "raw_tdx_data",
+    "market_cache": "market_cache/daily_bars_by_symbol",
+    "indicator_cache": "indicator_cache/daily_indicators.parquet",
+    "pools": "pools",
+    "output": "output",
+    "raw_sh_index": "raw_SH_index"
+  },
+  "default_strategy": "renko_chart_select_strategy_v0",
+  "pool_schema_version": "pool_contract_v2_factor_first_t4"
+}

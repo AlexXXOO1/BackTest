@@ -22,8 +22,8 @@ from typing import Iterable
 
 import pandas as pd
 
-from config import INDICATOR_CACHE_PATH, MARKET_CACHE_DIR
-from indicators import add_all_indicators
+from core.config import INDICATOR_CACHE_PATH, MARKET_CACHE_DIR
+from data_engine.indicators import add_all_indicators
 
 
 def _read_table(path: str | Path) -> pd.DataFrame:

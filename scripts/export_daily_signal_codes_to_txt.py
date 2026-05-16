@@ -1,13 +1,10 @@
-﻿from __future__ import annotations
+# -*- coding: utf-8 -*-
+from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pandas as pd
-
-
-INPUT_CSV = Path(
-    r"C:\Users\zyf37\Desktop\BackTest_System\daily_signal_score_2026-05-11_fwd_return_pct_T1.csv"
-)
 
 
 def normalize_code(value: object) -> str:
@@ -25,17 +22,28 @@ def normalize_code(value: object) -> str:
     return text
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export the code column from a CSV to a TXT file.")
+    parser.add_argument("--input-csv", type=Path, required=True, help="Input CSV path.")
+    parser.add_argument("--code-column", type=str, default="code", help="Column name containing stock codes.")
+    parser.add_argument("--output-txt", type=Path, default=None, help="Optional output TXT path.")
+    return parser.parse_args()
+
+
 def main() -> None:
-    if not INPUT_CSV.exists():
-        raise FileNotFoundError(f"Input CSV not found: {INPUT_CSV}")
+    args = parse_args()
+    input_csv = args.input_csv
 
-    df = pd.read_csv(INPUT_CSV, dtype={"code": "string"})
+    if not input_csv.exists():
+        raise FileNotFoundError(f"Input CSV not found: {input_csv}")
 
-    if "code" not in df.columns:
-        raise ValueError(f"Missing required column: code. Available columns: {list(df.columns)}")
+    df = pd.read_csv(input_csv, dtype={args.code_column: "string"})
+
+    if args.code_column not in df.columns:
+        raise ValueError(f"Missing required column: {args.code_column}. Available columns: {list(df.columns)}")
 
     codes = (
-        df["code"]
+        df[args.code_column]
         .map(normalize_code)
         .dropna()
         .loc[lambda s: s != ""]
@@ -43,7 +51,8 @@ def main() -> None:
         .tolist()
     )
 
-    output_txt = INPUT_CSV.with_name(f"{INPUT_CSV.stem}_codes.txt")
+    output_txt = args.output_txt or input_csv.with_name(f"{input_csv.stem}_codes.txt")
+    output_txt.parent.mkdir(parents=True, exist_ok=True)
     output_txt.write_text("\n".join(codes) + ("\n" if codes else ""), encoding="utf-8")
 
     print(f"Saved codes: {len(codes)}")
