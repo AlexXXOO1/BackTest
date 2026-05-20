@@ -17,6 +17,7 @@ Cached indicators:
 """
 
 import json
+import shutil
 from pathlib import Path
 from typing import Iterable
 
@@ -155,24 +156,60 @@ class IndicatorStore:
         if not files:
             raise FileNotFoundError(
                 f"No market parquet files found in {self.market_cache_dir}. "
-                "Please run scripts/import_tdx_txt.py first, or check MARKET_CACHE_DIR."
+                "Please run ops/daily_update/import_tdx_txt.py first, or check MARKET_CACHE_DIR."
             )
 
         start_ts = pd.Timestamp(start_date) if start_date is not None else None
         end_ts = pd.Timestamp(end_date) if end_date is not None else None
 
-        existing = self.read() if incremental and self.exists() else pd.DataFrame()
-        if incremental and start_ts is None and not existing.empty and "date" in existing.columns:
-            max_date = pd.to_datetime(existing["date"], errors="coerce").max()
-            if pd.notna(max_date):
-                start_ts = max_date - pd.Timedelta(days=int(lookback_days * 1.6))
+        if incremental:
+            print("[WARN] incremental=True still needs existing-cache merge. For low-memory rebuild, prefer full rebuild.", flush=True)
 
-        rows: list[pd.DataFrame] = []
+        tmp_dir = self.indicator_cache_path.parent / f"_tmp_{self.indicator_cache_path.stem}_parts"
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        part_paths: list[Path] = []
+        buffer: list[pd.DataFrame] = []
+        buffer_rows = 0
+        total_rows = 0
+        final_columns: list[str] = []
         total = len(files)
+        part_no = 0
+        chunk_row_limit = 250_000
+
+        def flush_buffer() -> None:
+            nonlocal buffer, buffer_rows, total_rows, final_columns, part_no
+
+            if not buffer:
+                return
+
+            part = pd.concat(buffer, ignore_index=True, copy=False)
+            if not part.empty:
+                part["date"] = pd.to_datetime(part["date"], errors="coerce")
+                part = part.sort_values(["symbol", "date"], kind="stable").drop_duplicates(
+                    ["symbol", "date"], keep="last"
+                ).reset_index(drop=True)
+
+            if not part.empty:
+                part_no += 1
+                part_path = tmp_dir / f"part-{part_no:05d}.parquet"
+                part.to_parquet(part_path, index=False)
+                part_paths.append(part_path)
+                total_rows += int(len(part))
+                final_columns = list(part.columns)
+                print(
+                    f"[INFO] wrote indicator part {part_no}: rows={len(part):,}, total_rows={total_rows:,}",
+                    flush=True,
+                )
+
+            buffer = []
+            buffer_rows = 0
 
         for i, path in enumerate(files, start=1):
-            if i == 1 or i % 200 == 0 or i == total:
-                print(f"[INFO] Build basic indicators: {i}/{total}")
+            if i == 1 or i % 50 == 0 or i == total:
+                print(f"[INFO] Build basic indicators: {i}/{total}", flush=True)
 
             try:
                 raw = _read_table(path)
@@ -182,7 +219,6 @@ class IndicatorStore:
                 symbol = _normalize_symbol(path.stem)
                 base = _standardize_market_df(raw, fallback_symbol=symbol, fallback_file=path.name)
 
-                # Keep enough prior history for rolling/MACD before trimming final rows.
                 if end_ts is not None:
                     base = base[base["date"] <= end_ts]
                 if base.empty:
@@ -205,31 +241,56 @@ class IndicatorStore:
                     calc = calc[pd.to_datetime(calc["date"], errors="coerce") <= end_ts]
 
                 if not calc.empty:
-                    rows.append(calc)
+                    buffer.append(calc)
+                    buffer_rows += int(len(calc))
+
+                if buffer_rows >= chunk_row_limit:
+                    flush_buffer()
+
             except Exception as exc:
-                print(f"[WARN] skip {path.name}: {exc}")
+                print(f"[WARN] skip {path.name}: {exc}", flush=True)
 
-        new_df = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+        flush_buffer()
 
-        if incremental and not existing.empty and not new_df.empty:
-            min_new_date = pd.to_datetime(new_df["date"], errors="coerce").min()
-            existing = existing[pd.to_datetime(existing["date"], errors="coerce") < min_new_date]
-            out = pd.concat([existing, new_df], ignore_index=True)
-        elif incremental and new_df.empty:
-            out = existing
+        if not part_paths:
+            out = pd.DataFrame()
+            _write_table(out, self.indicator_cache_path)
+            final_columns = []
+            total_rows = 0
         else:
-            out = new_df
+            print(f"[INFO] merging {len(part_paths):,} indicator parts into final parquet...", flush=True)
+            try:
+                import pyarrow.parquet as pq
 
-        if not out.empty:
-            out["date"] = pd.to_datetime(out["date"], errors="coerce")
-            out = out.sort_values(["symbol", "date"]).drop_duplicates(["symbol", "date"], keep="last").reset_index(drop=True)
+                final_tmp = self.indicator_cache_path.with_suffix(self.indicator_cache_path.suffix + ".tmp")
+                if final_tmp.exists():
+                    final_tmp.unlink()
 
-        _write_table(out, self.indicator_cache_path)
+                writer = None
+                try:
+                    for part_path in part_paths:
+                        table = pq.read_table(part_path)
+                        if writer is None:
+                            writer = pq.ParquetWriter(final_tmp, table.schema)
+                        else:
+                            table = table.cast(writer.schema)
+                        writer.write_table(table)
+                finally:
+                    if writer is not None:
+                        writer.close()
+
+                final_tmp.replace(self.indicator_cache_path)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to merge indicator parquet parts: {exc}") from exc
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            out = pd.DataFrame(columns=final_columns)
 
         meta = {
-            "indicator_layer": "clean_basic_indicators_with_renko_v2_no_data_store_dependency",
-            "rows": int(len(out)),
-            "columns": list(out.columns),
+            "indicator_layer": "clean_basic_indicators_with_renko_v2_no_data_store_dependency_chunked",
+            "rows": int(total_rows),
+            "columns": list(final_columns),
             "market_cache_dir": str(self.market_cache_dir),
             "indicator_cache_path": str(self.indicator_cache_path),
             "n1": int(n1),
@@ -239,10 +300,12 @@ class IndicatorStore:
             "macd": {"fast": int(macd_fast), "slow": int(macd_slow), "signal": int(macd_signal)},
             "renko_cached_columns": ["renko_value"],
             "strategy_specific_columns_excluded": True,
+            "chunked_write": True,
+            "part_count": int(len(part_paths)),
         }
         meta_path = self.indicator_cache_path.with_suffix(self.indicator_cache_path.suffix + ".meta.json")
         meta_path.parent.mkdir(parents=True, exist_ok=True)
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[INFO] Basic indicator meta saved: {meta_path}")
+        print(f"[INFO] Basic indicator meta saved: {meta_path}", flush=True)
 
         return out

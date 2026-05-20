@@ -11,7 +11,7 @@ import pandas as pd
 from tqdm import tqdm
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 import sys
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -74,7 +74,8 @@ def parse_args():
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Overwrite existing parquet files.",
+        default=True,
+        help="Compatibility option. Market cache refresh is always forced.",
     )
 
     parser.add_argument(
@@ -200,20 +201,13 @@ def fix_txt_encoding_inplace(txt_dir: Path, output_encoding: str = "utf-8-sig") 
 
 
 def print_encoding_fix_report(report: dict) -> None:
-    print("========== TXT encoding fix completed ==========")
-    print(f"txt_dir: {report['txt_dir']}")
-    print(f"total_txt_files: {report['total_txt_files']}")
-    print(f"fixed_files: {report['fixed_files']}")
-    print(f"skipped_files: {report['skipped_files']}")
     print(
-        "removed_tdx_source_tail_files: "
-        f"{report.get('removed_tdx_source_tail_files', 0)}"
+        "TXT encoding fix completed: "
+        f"total={report['total_txt_files']}, "
+        f"fixed={report['fixed_files']}, "
+        f"skipped={report['skipped_files']}, "
+        f"removed_tail={report.get('removed_tdx_source_tail_files', 0)}"
     )
-
-    if report["encoding_count"]:
-        print("detected_encoding_count:")
-        for encoding, count in sorted(report["encoding_count"].items()):
-            print(f"  {encoding}: {count}")
 
     if report["failures"]:
         print("Encoding fix failures:")
@@ -552,7 +546,7 @@ def import_txt_files(
     market_cache_dir: Path,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    overwrite: bool = False,
+    overwrite: bool = True,
 ) -> dict:
     report = {
         "txt_dir": str(txt_dir),
@@ -585,10 +579,6 @@ def import_txt_files(
 
             out_path = market_cache_dir / f"{symbol}.parquet"
 
-            if out_path.exists() and not overwrite:
-                report["skipped_files"] += 1
-                continue
-
             raw = read_tdx_txt_table(path)
 
             if raw.empty:
@@ -613,8 +603,8 @@ def import_txt_files(
 
             report["imported_files"] += 1
 
-            if symbol.startswith("SZ#003"):
-                report["sz_003_files"] += 1
+            # if symbol.startswith("SZ#003"):
+            #     report["sz_003_files"] += 1
 
         except Exception as exc:
             report["failed_files"] += 1
@@ -629,11 +619,15 @@ def import_txt_files(
 
 
 def print_import_report(report: dict) -> None:
-    print("========== Import completed ==========")
-
-    for key, value in report.items():
-        if key != "failures":
-            print(f"{key}: {value}")
+    print(
+        "Import completed: "
+        f"total={report['total_txt_files']}, "
+        f"imported={report['imported_files']}, "
+        f"skipped={report['skipped_files']}, "
+        f"failed={report['failed_files']}, "
+        f"empty_raw={report['empty_raw_files']}, "
+        f"empty_normalized={report['empty_normalized_files']}"
+    )
 
     if report["failures"]:
         print("Failures:")
@@ -642,36 +636,15 @@ def print_import_report(report: dict) -> None:
 
 
 def print_market_cache_check(market_cache_dir: Path) -> None:
-    print("========== CHECK MARKET CACHE ==========")
-
     parquet_files = sorted(market_cache_dir.glob("*.parquet"))
-    print(f"market parquet count: {len(parquet_files)}")
-
-    check_003 = sorted(market_cache_dir.glob("SZ#003*.parquet"))
-    print(f"SZ#003 parquet count: {len(check_003)}")
-
-    for p in check_003[:20]:
-        print(" ", p.name)
-
-    if parquet_files:
-        sample = parquet_files[0]
-        try:
-            df = pd.read_parquet(sample)
-            print("sample:", sample)
-            print(df.head(3).to_string(index=False))
-            print("sample rows:", len(df))
-            print("sample date range:", df["date"].min(), "->", df["date"].max())
-            print("sample symbol head:", df["symbol"].head(3).tolist())
-        except Exception as exc:
-            print("sample read failed:", repr(exc))
+    print(f"Market cache files: {len(parquet_files)}")
 
 
 def main() -> None:
     args = parse_args()
 
     if args.clear_market_cache:
-        print("========== CLEAR MARKET CACHE ==========")
-        print(f"clear dir: {args.market_cache_dir}")
+        print(f"Clear market cache: {args.market_cache_dir}")
         clear_market_cache_dir(args.market_cache_dir)
 
     if args.fix_encoding:
@@ -686,7 +659,7 @@ def main() -> None:
         market_cache_dir=args.market_cache_dir,
         start_date=args.start_date,
         end_date=args.end_date,
-        overwrite=args.overwrite,
+        overwrite=True,
     )
 
     print_import_report(report)

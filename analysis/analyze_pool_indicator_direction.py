@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -10,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 
-ANALYSIS_SCHEMA_VERSION = "factor_shape_v14_safe_full_factor_scan"
+ANALYSIS_SCHEMA_VERSION = "factor_shape_v15_t20_safe_full_factor_scan"
 
 EXCLUDE_COLS = {
     "date",
@@ -64,26 +65,7 @@ INVALID_FORWARD_TARGET_PREFIXES = (
 )
 
 
-FUTURE_RAW_EXCLUDE_COLS = {
-    "t1_date",
-    "t1_close",
-    "t2_date",
-    "t2_open",
-    "t2_close",
-    "t3_date",
-    "t3_open",
-    "t3_close",
-    "t4_date",
-    "t4_open",
-    "t4_close",
-}
-
-FUTURE_RAW_PREFIXES = (
-    "t1_",
-    "t2_",
-    "t3_",
-    "t4_",
-)
+FUTURE_RAW_RE = re.compile(r"^t\d+_(date|open|close)$")
 
 DETAIL_ID_COLS = (
     "date",
@@ -192,7 +174,7 @@ def _is_invalid_forward_target_col(col: str) -> bool:
 
 def _is_future_raw_col(col: str) -> bool:
     c = str(col).strip().lower()
-    return c in FUTURE_RAW_EXCLUDE_COLS
+    return bool(FUTURE_RAW_RE.match(c))
 
 
 def _is_absolute_market_value_col(col: str) -> bool:
@@ -214,7 +196,7 @@ def _validate_target_col(df: pd.DataFrame, target_col: str) -> None:
 
     if _is_invalid_forward_target_col(target_col):
         raise ValueError(
-            f"Invalid target_col: {target_col}. Use fwd_return_pct_T1/T2/T3/T4 as target. "
+            f"Invalid target_col: {target_col}. Use fwd_return_pct_T1 through fwd_return_pct_T20 as target. "
             f"Do not use fwd_close_T* or fwd_up_T*."
         )
 
@@ -425,6 +407,36 @@ def _classify_binary_pattern(
     )
 
 
+
+def _safe_numeric_corr(tmp, factor, target_col, method="pearson", sample_limit=50000):
+    cols = [factor, target_col]
+    work = tmp[cols].replace([np.inf, -np.inf], np.nan).dropna()
+    n = len(work)
+    if n < 3:
+        return np.nan
+
+    # Full Spearman ranking is memory-heavy on large pools.
+    # A deterministic sample is enough for direction screening in Analyze Pool Indicator.
+    if n > sample_limit:
+        work = work.sample(n=sample_limit, random_state=42)
+
+    try:
+        x = pd.to_numeric(work[factor], errors="coerce")
+        y = pd.to_numeric(work[target_col], errors="coerce")
+        valid = x.notna() & y.notna()
+        x = x[valid]
+        y = y[valid]
+        if len(x) < 3:
+            return np.nan
+
+        if method == "spearman":
+            return float(x.rank(method="average").corr(y.rank(method="average"), method="pearson"))
+
+        return float(x.corr(y, method="pearson"))
+    except Exception:
+        return np.nan
+
+
 def analyze_indicator_direction(
     df: pd.DataFrame,
     target_col: str,
@@ -535,8 +547,8 @@ def analyze_indicator_direction(
         best_minus_worst_return = best_bucket_mean_return - worst_bucket_mean_return
         best_minus_worst_up_ratio = best_bucket_up_ratio - worst_bucket_up_ratio
 
-        spearman_ic = tmp[factor].corr(tmp[target_col], method="spearman")
-        pearson_ic = tmp[factor].corr(tmp[target_col], method="pearson")
+        spearman_ic = _safe_numeric_corr(tmp, factor, target_col, method="spearman")
+        pearson_ic = _safe_numeric_corr(tmp, factor, target_col, method="pearson")
 
         vote_spearman = _signed_vote(spearman_ic, IC_EPS)
         vote_pearson = _signed_vote(pearson_ic, IC_EPS)

@@ -32,12 +32,170 @@ DEFAULT_SH_INDEX_DIR = RAW_SH_INDEX_DIR
 
 DEFAULT_ANALYZE_POOL_SCRIPT = PROJECT_ROOT / "analysis" / "analyze_pool_indicator_direction.py"
 DEFAULT_ANALYZE_POOL_OUTPUT_DIR = OUTPUT_DIR / "analyze_pool_indicator_dashboard_v3"
-DEFAULT_TARGET_COLS = ("fwd_return_pct_T1", "fwd_return_pct_T2", "fwd_return_pct_T3", "fwd_return_pct_T4")
+DEFAULT_TARGET_COLS = tuple(f"fwd_return_pct_T{horizon}" for horizon in range(1, 21))
 
 
 def target_cols_to_show(target_options: list[str]) -> list[str]:
     shown = [c for c in DEFAULT_TARGET_COLS if c in target_options]
     return shown if shown else list(target_options)
+
+
+def render_forward_return_macro_curve(df: pd.DataFrame, target_cols: list[str]) -> None:
+    rows: list[dict[str, Any]] = []
+
+    for col in target_cols:
+        if col not in df.columns:
+            continue
+
+        match = re.search(r"_T(\d+)$", str(col))
+        if not match:
+            continue
+
+        horizon = int(match.group(1))
+        if horizon < 1 or horizon > 20:
+            continue
+
+        s = pd.to_numeric(df[col], errors="coerce")
+        s = s[(s.notna()) & (s != float("inf")) & (s != float("-inf"))]
+
+        if s.empty:
+            continue
+
+        rows.append(
+            {
+                "horizon": horizon,
+                "target_col": col,
+                "sample_count": int(s.size),
+                "mean_return": float(s.mean()),
+                "median_return": float(s.median()),
+                "p25_return": float(s.quantile(0.25)),
+                "p75_return": float(s.quantile(0.75)),
+                "up_ratio": float((s > 0).mean()),
+            }
+        )
+
+    curve_df = pd.DataFrame(rows).sort_values("horizon")
+    if curve_df.empty:
+        st.info("No usable T+1 to T+20 forward return columns found for macro curve.")
+        return
+
+    section_header("T+1 to T+20 Forward Return Macro Curve")
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(
+        go.Scatter(
+            x=curve_df["horizon"],
+            y=curve_df["mean_return"],
+            mode="lines+markers",
+            name="Mean return",
+            line=dict(width=2.8),
+            marker=dict(size=6),
+            customdata=curve_df[["target_col", "sample_count"]],
+            hovertemplate=(
+                "%{customdata[0]}<br>"
+                "sample=%{customdata[1]:,}<br>"
+                "mean=%{y:.4f}%<extra></extra>"
+            ),
+        ),
+        secondary_y=False,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=curve_df["horizon"],
+            y=curve_df["median_return"],
+            mode="lines+markers",
+            name="Median return",
+            line=dict(width=2.2, dash="dot"),
+            marker=dict(size=5),
+            customdata=curve_df[["target_col", "sample_count"]],
+            hovertemplate=(
+                "%{customdata[0]}<br>"
+                "sample=%{customdata[1]:,}<br>"
+                "median=%{y:.4f}%<extra></extra>"
+            ),
+        ),
+        secondary_y=False,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=curve_df["horizon"],
+            y=curve_df["p25_return"],
+            mode="lines+markers",
+            name="P25 return",
+            line=dict(width=1.8, dash="dash"),
+            marker=dict(size=4),
+            customdata=curve_df[["target_col", "sample_count"]],
+            hovertemplate=(
+                "%{customdata[0]}<br>"
+                "sample=%{customdata[1]:,}<br>"
+                "p25=%{y:.4f}%<extra></extra>"
+            ),
+        ),
+        secondary_y=False,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=curve_df["horizon"],
+            y=curve_df["p75_return"],
+            mode="lines+markers",
+            name="P75 return",
+            line=dict(width=1.8, dash="dash"),
+            marker=dict(size=4),
+            customdata=curve_df[["target_col", "sample_count"]],
+            hovertemplate=(
+                "%{customdata[0]}<br>"
+                "sample=%{customdata[1]:,}<br>"
+                "p75=%{y:.4f}%<extra></extra>"
+            ),
+        ),
+        secondary_y=False,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=curve_df["horizon"],
+            y=curve_df["up_ratio"] * 100.0,
+            mode="lines+markers",
+            name="Up ratio",
+            line=dict(width=2.0, dash="longdash"),
+            marker=dict(size=5),
+            customdata=curve_df[["target_col", "sample_count"]],
+            hovertemplate=(
+                "%{customdata[0]}<br>"
+                "sample=%{customdata[1]:,}<br>"
+                "up ratio=%{y:.2f}%<extra></extra>"
+            ),
+        ),
+        secondary_y=True,
+    )
+
+    fig.update_xaxes(
+        title_text="Forward horizon",
+        tickmode="array",
+        tickvals=curve_df["horizon"].tolist(),
+        ticktext=[f"T+{int(x)}" for x in curve_df["horizon"].tolist()],
+        showgrid=False,
+    )
+    fig.update_yaxes(title_text="Forward return pct", secondary_y=False)
+    fig.update_yaxes(title_text="Up ratio pct", secondary_y=True)
+
+    fig.update_layout(
+        title=dict(text="Pool-level forward return curve", x=0.01, xanchor="left", font=dict(size=18)),
+        hovermode="x unified",
+        height=440,
+        template="plotly_white",
+        margin=dict(l=20, r=24, t=68, b=28),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+
+    st.plotly_chart(fig, width="stretch")
+
+    with st.expander("Macro curve data", expanded=False):
+        st.dataframe(curve_df, width="stretch", hide_index=True)
 
 
 
@@ -882,7 +1040,28 @@ def render_analyze_pool_indicator(default_pool_path: Path | None) -> None:
         st.error(f"Unable to read pool columns: {exc}")
         return
 
-    display_targets = target_cols_to_show(target_options)
+    default_display_targets = target_cols_to_show(target_options)
+    target_key = "analyze_pool_indicator_target_cols"
+    previous_target_state = st.session_state.get(target_key)
+    
+    if previous_target_state is None:
+        st.session_state[target_key] = list(default_display_targets)
+    else:
+        if not isinstance(previous_target_state, list):
+            previous_target_state = list(previous_target_state)
+        cleaned_target_state = [x for x in previous_target_state if x in target_options]
+        if not cleaned_target_state:
+            cleaned_target_state = list(default_display_targets)
+        if cleaned_target_state != previous_target_state:
+            st.session_state[target_key] = cleaned_target_state
+    
+    with st.sidebar:
+        display_targets = st.multiselect(
+            "Target horizons",
+            options=target_options,
+            key=target_key,
+            help="Choose which fwd_return_pct_T* horizons to run and display.",
+        )
     if not display_targets:
         st.error("No fwd_return_pct_T* target column found in this pool.")
         return
@@ -954,6 +1133,9 @@ def render_analyze_pool_indicator(default_pool_path: Path | None) -> None:
             if row["stderr_tail"]:
                 with st.expander(f"stderr: {row['target_col']}", expanded=True):
                     st.code(row["stderr_tail"], language="text")
+
+    st.divider()
+    render_forward_return_macro_curve(target_source_df, display_targets)
 
     st.divider()
     section_header("Summary by target horizon")
@@ -1168,10 +1350,7 @@ def _build_extreme_lookup_pool(pool_df: pd.DataFrame, factor: str, target_col: s
         "file",
         "selection_strategy",
         target_col,
-        "fwd_return_pct_T1",
-        "fwd_return_pct_T2",
-        "fwd_return_pct_T3",
-        "fwd_return_pct_T4",
+        *[f"fwd_return_pct_T{horizon}" for horizon in range(1, 21)],
         "open",
         "high",
         "low",
@@ -1235,10 +1414,7 @@ def _first_extreme_sample_from_work(
         "file",
         "selection_strategy",
         target_col,
-        "fwd_return_pct_T1",
-        "fwd_return_pct_T2",
-        "fwd_return_pct_T3",
-        "fwd_return_pct_T4",
+        *[f"fwd_return_pct_T{horizon}" for horizon in range(1, 21)],
         "open",
         "high",
         "low",
@@ -1350,10 +1526,7 @@ def _render_single_factor_extreme_samples(
         "date",
         "file",
         "selection_strategy",
-        "fwd_return_pct_T1",
-        "fwd_return_pct_T2",
-        "fwd_return_pct_T3",
-        "fwd_return_pct_T4",
+        *[f"fwd_return_pct_T{horizon}" for horizon in range(1, 21)],
         "open",
         "high",
         "low",
@@ -1683,11 +1856,12 @@ def render_multi_factor_combination_test(default_pool_path: Path | None) -> None
     pool_path = default_pool_path
 
     try:
+        # Read the pool only once. Reading selected_only=True and selected_only=False
+        # back-to-back can duplicate a large parquet in memory during Streamlit reruns.
         pool_df = load_pool(str(pool_path), selected_only=True)
-        all_pool_df = load_pool(str(pool_path), selected_only=False)
-        target_options = list_forward_return_targets(all_pool_df)
+        target_options = list_forward_return_targets(pool_df)
     except Exception as exc:
-        st.error(f"Unable to read pool: {exc}")
+        st.error(f"Unable to read pool: {type(exc).__name__}: {exc!r}")
         return
 
     display_targets = target_cols_to_show(target_options)
@@ -1718,7 +1892,7 @@ def render_multi_factor_combination_test(default_pool_path: Path | None) -> None
     c3.markdown(auto_card("Pool rows", f"{len(pool_df):,}"), unsafe_allow_html=True)
     c4.markdown(auto_card("Targets", ", ".join(display_targets)), unsafe_allow_html=True)
 
-    st.caption("Combination logic is AND. Bucket intervals are defined only by T0 factor values, then evaluated against T+1, T+2, and T+3 forward returns.")
+    st.caption("Combination logic is AND. Bucket intervals are defined only by T0 factor values, then evaluated against T+1 through T+20 forward returns.")
 
     if historical_bucket_df.empty or "factor" not in historical_bucket_df.columns or "bucket" not in historical_bucket_df.columns:
         st.warning("No prior bucket detail output found. Run Analyze Pool Indicator first so the page can infer available factors and bucket counts.")
@@ -1730,11 +1904,23 @@ def render_multi_factor_combination_test(default_pool_path: Path | None) -> None
         st.warning("No factor found in prior bucket detail output.")
         return
 
+    factor_key = "multi_factor_selected_factors"
+    previous_factor_state = st.session_state.get(factor_key, [])
+    if previous_factor_state is None:
+        previous_factor_state = []
+    if not isinstance(previous_factor_state, list):
+        previous_factor_state = list(previous_factor_state)
+
+    valid_factor_set = set(factor_options)
+    cleaned_factor_state = [x for x in previous_factor_state if x in valid_factor_set]
+    if cleaned_factor_state != previous_factor_state:
+        st.session_state[factor_key] = cleaned_factor_state
+
     selected_factors = st.multiselect(
         "Factors",
         options=factor_options,
         default=[],
-        key="multi_factor_selected_factors",
+        key=factor_key,
     )
 
     def _range_cols(df: pd.DataFrame) -> tuple[str | None, str | None]:
@@ -1837,12 +2023,31 @@ def render_multi_factor_combination_test(default_pool_path: Path | None) -> None
             labels.append(label)
             label_to_bucket[label] = bucket_value
 
+        bucket_key = f"multi_factor_buckets_{_safe_key(factor)}"
+
+        # Streamlit keeps widget state across reruns. If bucket definitions change,
+        # stale selected labels can remain in session_state and crash the page.
+        previous_bucket_state = st.session_state.get(bucket_key, [])
+        if previous_bucket_state is None:
+            previous_bucket_state = []
+        if not isinstance(previous_bucket_state, list):
+            previous_bucket_state = list(previous_bucket_state)
+
+        valid_label_set = set(labels)
+        cleaned_bucket_state = [x for x in previous_bucket_state if x in valid_label_set]
+        if cleaned_bucket_state != previous_bucket_state:
+            st.session_state[bucket_key] = cleaned_bucket_state
+
         chosen_labels = st.multiselect(
             f"{factor}: T0 buckets",
             options=labels,
             default=[],
-            key=f"multi_factor_buckets_{_safe_key(factor)}",
+            key=bucket_key,
         )
+
+        # Be defensive again after the widget returns. This protects against stale
+        # state when a user removes buckets/factors quickly during reruns.
+        chosen_labels = [x for x in chosen_labels if x in label_to_bucket]
         condition_map[factor] = [label_to_bucket[x] for x in chosen_labels]
 
     run_clicked = st.button("Run", type="primary", width='stretch', key="multi_factor_run")
@@ -1860,7 +2065,7 @@ def render_multi_factor_combination_test(default_pool_path: Path | None) -> None
         st.error("Select at least one bucket for every selected factor: " + ", ".join(missing_bucket_factors))
         return
 
-    work = pool_df.copy()
+    work = pool_df.copy(deep=False)
     mask = pd.Series(True, index=work.index)
 
     def _assign_bucket(values: pd.Series, fb: pd.DataFrame) -> pd.Series:

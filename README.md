@@ -12,7 +12,10 @@ BackTest_App/
   data_engine/                    data import, indicator cache, full-market cache
   data_engine/indicators/         reusable indicator calculation
   strategies/selection/           selection strategy logic
-  scripts/                        command-line entry points
+  ops/daily_update/              daily market-data update entry points
+  ops/pool_tools/                pool maintenance and compatibility tools
+  ops/export/                    export utilities
+  ops/ui/                        UI launcher utilities
   configs/settings.json           code/data path configuration
   tests/                          schema smoke tests
 ```
@@ -129,18 +132,57 @@ Pages:
    - Outputs summary and matched detail rows.
 ```
 
-## Main commands
 
-Build B1 stage-low pool:
+## Daily market update workflow
+
+Run these from the project root when raw TDX TXT data has been refreshed:
 
 ```powershell
-python .\scripts\build_pool.py --strategy b1_stage_low_select_strategy_v0 --no-csv
+python .\ops\daily_update\import_tdx_txt.py --fix-encoding --overwrite
+python .\ops\daily_update\build_indicators.py
+python .\ops\daily_update\build_pool.py --strategy b1_stage_low_select_strategy_v0 --incremental --incremental-refresh-days 45 --no-csv
+```
+
+Or run the same workflow with one command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\ops\daily_update\run_daily_update.ps1
+```
+
+`ops/daily_update/` is the operational folder for the three daily update scripts. The old `scripts/` folder has been removed.
+
+### build_pool safety checks
+
+`build_pool.py` now runs preflight checks before selection starts:
+
+```text
+1. Inspect market_cache/daily_bars_by_symbol/*.parquet date coverage.
+2. Resolve the effective build window.
+3. Verify indicator_cache/daily_indicators.parquet exists.
+4. Verify indicator cache contains the reusable columns required by the selected strategy family.
+5. Verify indicator cache date coverage is not stale versus the required build end date.
+```
+
+Incremental mode refreshes the recent window, removes old pool rows in that date window, appends rebuilt rows, deduplicates by `symbol/date/selection_strategy`, and overwrites the pool safely. The default 45-calendar-day refresh window is intentional because forward fields now extend to T+20.
+
+## Main commands
+
+Build B1 stage-low pool incrementally:
+
+```powershell
+python .\ops\daily_update\build_pool.py --strategy b1_stage_low_select_strategy_v0 --incremental --incremental-refresh-days 45 --no-csv
+```
+
+Full rebuild B1 stage-low pool:
+
+```powershell
+python .\ops\daily_update\build_pool.py --strategy b1_stage_low_select_strategy_v0 --no-csv
 ```
 
 Build Renko v0 pool:
 
 ```powershell
-python .\scripts\build_pool.py --strategy renko_chart_select_strategy_v0 --no-csv
+python .\ops\daily_update\build_pool.py --strategy renko_chart_select_strategy_v0 --no-csv
 ```
 
 Run main dashboard:
@@ -152,11 +194,11 @@ streamlit run .\app\ui\pool_dashboard.py
 Build indicators:
 
 ```powershell
-python .\scripts\build_indicators.py
+python .\ops\daily_update\build_indicators.py
 ```
 
 Import TDX TXT market data:
 
 ```powershell
-python .\scripts\import_tdx_txt.py --fix-encoding --overwrite
+python .\ops\daily_update\import_tdx_txt.py --fix-encoding --overwrite
 ```

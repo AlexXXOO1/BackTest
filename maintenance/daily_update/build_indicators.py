@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -62,13 +63,19 @@ def main() -> None:
         macd_signal=args.macd_signal,
     )
 
+    meta_path = indicator_store.indicator_cache_path.with_suffix(indicator_store.indicator_cache_path.suffix + ".meta.json")
+    meta = {}
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
     print("========== Clean indicator cache completed ==========")
-    print(f"Rows: {len(df):,}")
-    print(f"Columns: {len(df.columns)}")
+    print(f"Rows: {int(meta.get('rows', len(df))):,}")
+    print(f"Columns: {len(meta.get('columns', list(df.columns)))}")
     print(f"Path: {indicator_store.indicator_cache_path}")
-    if not df.empty:
+    columns = meta.get("columns", list(df.columns))
+    if columns:
         print("Column list:")
-        print(df.columns.tolist())
+        print(columns)
 
 
 if __name__ == "__main__":

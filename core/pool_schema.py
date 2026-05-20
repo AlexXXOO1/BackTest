@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable
+import re
 
 import pandas as pd
 
 
-POOL_SCHEMA_VERSION = "pool_contract_v2_factor_first_t4"
+POOL_SCHEMA_VERSION = "pool_contract_v3_factor_first_t20"
+FORWARD_HORIZON_MAX = 20
 
 REQUIRED_IDENTITY_COLUMNS = [
     "symbol",
@@ -25,32 +27,22 @@ REQUIRED_MARKET_COLUMNS = [
 ]
 
 REQUIRED_FORWARD_PRICE_COLUMNS = [
-    "t1_date",
-    "t1_open",
-    "t1_close",
-    "t2_date",
-    "t2_open",
-    "t2_close",
-    "t3_date",
-    "t3_open",
-    "t3_close",
-    "t4_date",
-    "t4_open",
-    "t4_close",
+    col
+    for horizon in range(1, FORWARD_HORIZON_MAX + 1)
+    for col in (
+        f"t{horizon}_date",
+        f"t{horizon}_open",
+        f"t{horizon}_close",
+    )
 ]
 
 REQUIRED_FORWARD_RETURN_COLUMNS = [
-    "fwd_return_pct_T1",
-    "fwd_return_pct_T2",
-    "fwd_return_pct_T3",
-    "fwd_return_pct_T4",
+    f"fwd_return_pct_T{horizon}"
+    for horizon in range(1, FORWARD_HORIZON_MAX + 1)
 ]
 
 OPTIONAL_FORWARD_COLUMNS = [
-    "fwd_up_T1",
-    "fwd_up_T2",
-    "fwd_up_T3",
-    "fwd_up_T4",
+    *[f"fwd_up_T{horizon}" for horizon in range(1, FORWARD_HORIZON_MAX + 1)],
     "forward_data_status",
 ]
 
@@ -77,14 +69,9 @@ FORBIDDEN_FINAL_POOL_COLUMNS = [
     *REMOVED_SCORE_COLUMNS,
 ]
 
-FORWARD_PREFIXES = (
-    "t1_",
-    "t2_",
-    "t3_",
-    "t4_",
-    "fwd_",
-    "forward_",
-)
+FORWARD_PREFIXES = ("fwd_", "forward_")
+FORWARD_RAW_RE = re.compile(r"^t([1-9]\d*)_(date|open|high|low|close)$")
+
 
 ALLOWED_FORWARD_COLUMNS = set(REQUIRED_FORWARD_PRICE_COLUMNS) | set(REQUIRED_FORWARD_RETURN_COLUMNS) | set(OPTIONAL_FORWARD_COLUMNS)
 
@@ -151,6 +138,8 @@ def detect_factor_columns(df: pd.DataFrame) -> list[str]:
             continue
         if any(lower.startswith(prefix) for prefix in FORWARD_PREFIXES):
             continue
+        if name in ALLOWED_FORWARD_COLUMNS:
+            continue
         if name.endswith("_date") or name == "date":
             continue
         if not _is_numeric_like(df[name]):
@@ -192,6 +181,8 @@ def validate_pool_schema(df: pd.DataFrame, strategy_name: str | None = None) -> 
         lower = name.lower()
         if any(lower.startswith(prefix) for prefix in FORWARD_PREFIXES) and name not in ALLOWED_FORWARD_COLUMNS:
             illegal_future.append(name)
+        elif FORWARD_RAW_RE.match(lower) and name not in ALLOWED_FORWARD_COLUMNS:
+            illegal_future.append(name)
     if illegal_future:
         errors.append(f"Illegal future-like columns found outside target set: {illegal_future}")
 
@@ -201,7 +192,7 @@ def validate_pool_schema(df: pd.DataFrame, strategy_name: str | None = None) -> 
             bad_values = sorted(df.loc[bad_strategy, "selection_strategy"].astype(str).dropna().unique().tolist())
             errors.append(f"selection_strategy contains unexpected values: {bad_values}")
 
-    for col in ["date", "t1_date", "t2_date", "t3_date", "t4_date"]:
+    for col in ["date", *[f"t{horizon}_date" for horizon in range(1, FORWARD_HORIZON_MAX + 1)]]:
         if col in df.columns:
             parsed = pd.to_datetime(df[col], errors="coerce")
             if not df.empty and parsed.notna().sum() == 0:
@@ -209,14 +200,11 @@ def validate_pool_schema(df: pd.DataFrame, strategy_name: str | None = None) -> 
 
     numeric_required = [
         *REQUIRED_MARKET_COLUMNS,
-        "t1_open",
-        "t1_close",
-        "t2_open",
-        "t2_close",
-        "t3_open",
-        "t3_close",
-        "t4_open",
-        "t4_close",
+        *[
+            col
+            for horizon in range(1, FORWARD_HORIZON_MAX + 1)
+            for col in (f"t{horizon}_open", f"t{horizon}_close")
+        ],
         *REQUIRED_FORWARD_RETURN_COLUMNS,
     ]
     for col in numeric_required:
